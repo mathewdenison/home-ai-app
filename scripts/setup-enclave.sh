@@ -60,8 +60,8 @@ JOIN_INFO_FILE="$USB_ROOT/cluster-join-info.env"
 if [ "$NODE_CHOICE" = "1" ]; then
     echo "Configuring as Beelink Gateway (Control Plane Server)..."
     
-    # Bootstrap control plane with registry, agent, etc.
-    zarf init --confirm
+    # Bootstrap control plane with registry, agent, and K3s
+    sudo zarf init --components k3s --confirm
 
     echo "🚀 [3/3] Deploying Beelink Gateway AI Container Layer..."
     # Find and deploy Beelink-specific package
