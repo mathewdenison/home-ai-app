@@ -22,3 +22,5 @@ components:
         url: https://nvidia.github.io/dcgm-exporter/helm-charts
         version: "3.4.0"
         namespace: ai-enclave
+    images:
+      - nvcr.io/nvidia/k8s/dcgm-exporter:3.3.5-3.4.0-ubuntu22.04
