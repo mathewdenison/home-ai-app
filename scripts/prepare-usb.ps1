@@ -61,14 +61,33 @@ if (Test-Path $LinuxZarfPath) {
     }
 }
 
-# 5. Clean / Create Staging Folder
+# 5. Download matching Zarf Init Package (Required for offline K3s setup!)
+Write-Host "`n[*] Step 3b: Downloading matching Zarf Init Package (amd64)..." -ForegroundColor Yellow
+$ZarfInitPkgUrl = "https://github.com/zarf-dev/zarf/releases/download/$ZarfVersion/zarf-init-amd64-${ZarfVersion}.tar.zst"
+$ZarfInitPkgPath = "$ProjectRoot\zarf-init-amd64-${ZarfVersion}.tar.zst"
+
+if (Test-Path $ZarfInitPkgPath) {
+    Write-Host "Local Zarf Init Package already exists at $ZarfInitPkgPath. Skipping download." -ForegroundColor Green
+} else {
+    Write-Host "Downloading from: $ZarfInitPkgUrl" -ForegroundColor Gray
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $ZarfInitPkgUrl -OutFile $ZarfInitPkgPath -UseBasicParsing
+        Write-Host "Download complete: $ZarfInitPkgPath" -ForegroundColor Green
+    } catch {
+        Write-Error "Failed to download Zarf Init Package from $ZarfInitPkgUrl. Error: $_"
+        exit 1
+    }
+}
+
+# 6. Clean / Create Staging Folder
 Write-Host "`n[*] Step 4: Creating clean staging directory at $StagingFolder..." -ForegroundColor Yellow
 if (Test-Path $StagingFolder) {
     Remove-Item -Path $StagingFolder -Recurse -Force
 }
 New-Item -Path $StagingFolder -ItemType Directory -Force | Out-Null
 
-# 6. Build Beelink Package
+# 7. Build Beelink Package
 Write-Host "`n[*] Step 5: Compiling Beelink Gateway Zarf package (amd64)..." -ForegroundColor Yellow
 & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-beelink.yaml" --architecture amd64 --confirm
 if ($LASTEXITCODE -ne 0) {
@@ -85,7 +104,7 @@ if ($BeelinkPkg) {
     Write-Warning "Could not find compiled Beelink package tarball!"
 }
 
-# 7. Build 4090 Package
+# 8. Build 4090 Package
 Write-Host "`n[*] Step 6: Compiling 4090 Workstation Zarf package (amd64)..." -ForegroundColor Yellow
 & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-4090.yaml" --architecture amd64 --confirm
 if ($LASTEXITCODE -ne 0) {
@@ -102,7 +121,7 @@ if ($WorkstationPkg) {
     Write-Warning "Could not find compiled 4090 Workstation package tarball!"
 }
 
-# 8. Copy Scripts and Files to Staging
+# 9. Copy Scripts and Files to Staging
 Write-Host "`n[*] Step 7: Staging deployment scripts and binaries..." -ForegroundColor Yellow
 
 # Copy Scripts folder and ensure all Linux scripts have Unix (LF) line endings!
@@ -123,12 +142,15 @@ Get-ChildItem -Path "$ProjectRoot\scripts" | ForEach-Object {
 Copy-Item -Path $LinuxZarfPath -Destination "$StagingFolder\zarf" -Force
 Copy-Item -Path $LinuxZarfPath -Destination "$StagingFolder\scripts\zarf" -Force
 
+# Copy matching offline Zarf Init Package to root of staging so that "zarf init" works completely offline!
+Copy-Item -Path $ZarfInitPkgPath -Destination "$StagingFolder\zarf-init-amd64-${ZarfVersion}.tar.zst" -Force
+
 # Copy configurations for reference
 Copy-Item -Path "$ProjectRoot\versions.yaml" -Destination $StagingFolder -Force
 
 Write-Host "Staging payload populated successfully." -ForegroundColor Green
 
-# 9. Finished
+# 10. Finished
 Write-Host "`n[+] Offline USB Payload Preparation Complete! [+]" -ForegroundColor Green
 Write-Host "==========================================================================" -ForegroundColor Cyan
 Write-Host "Next Steps:" -ForegroundColor White

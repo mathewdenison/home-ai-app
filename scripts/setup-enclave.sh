@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Ensure /usr/local/bin is in the system PATH (often excluded by default in STIG hardened environments)
+export PATH="/usr/local/bin:/usr/bin:$PATH"
+
 echo "🔒 [1/3] Validating Host Operating System STIG Compliance Status..."
 if ! oscap xccdf eval --profile xccdf_org.ssgproject.content_profile_stig /usr/share/xml/scap/ssg/content/ssg-ubuntu2404-ds.xml > /dev/null 2>&1; then
     echo "⚠️ Warning: Host OS has open STIG compliance alerts. Continuing configuration..."
@@ -27,6 +30,9 @@ if ! command -v zarf >/dev/null 2>&1; then
         echo "🚀 Installing local Zarf binary to /usr/local/bin/zarf..."
         sudo cp "$ZARF_BIN" /usr/local/bin/zarf
         sudo chmod +x /usr/local/bin/zarf
+        # Also copy to /usr/bin/zarf as a robust fallback
+        sudo cp "$ZARF_BIN" /usr/bin/zarf
+        sudo chmod +x /usr/bin/zarf
     else
         echo "❌ Error: Zarf is not installed, and no Linux 'zarf' binary was found in this directory."
         echo "Please download the Linux amd64 static 'zarf' binary and place it in the same folder as this script on your USB."
