@@ -6,8 +6,14 @@
 $PSScriptRoot = Split-Path -Parent -Path $MyInvocation.MyCommand.Definition
 $ProjectRoot = Resolve-Path "$PSScriptRoot\.."
 $StagingFolder = "$ProjectRoot\usb-payload"
+$CacheFolder = "$ProjectRoot\.cache"
 
 Write-Host "[*] Starting Sovereign Enclave offline USB preparation script..." -ForegroundColor Cyan
+
+# Ensure local cache folder exists to avoid polluting root directory
+if (-not (Test-Path $CacheFolder)) {
+    New-Item -Path $CacheFolder -ItemType Directory -Force | Out-Null
+}
 
 # 2. Run sync-versions.py
 Write-Host "`n[*] Step 1: Synchronizing configuration files with versions.yaml..." -ForegroundColor Yellow
@@ -42,13 +48,13 @@ try {
 
 Write-Host "Detected Zarf Version: $ZarfVersion" -ForegroundColor Green
 
-# 4. Download Linux Zarf CLI Binary
+# 4. Download Linux Zarf CLI Binary to Local Cache
 Write-Host "`n[*] Step 3: Downloading matching Linux amd64 Zarf binary..." -ForegroundColor Yellow
 $LinuxZarfUrl = "https://github.com/zarf-dev/zarf/releases/download/$ZarfVersion/zarf_${ZarfVersion}_Linux_amd64"
-$LinuxZarfPath = "$ProjectRoot\zarf-linux-amd64"
+$LinuxZarfPath = "$CacheFolder\zarf-linux-amd64"
 
 if (Test-Path $LinuxZarfPath) {
-    Write-Host "Local Linux Zarf binary already exists at $LinuxZarfPath. Skipping download." -ForegroundColor Green
+    Write-Host "Cached Linux Zarf binary exists at $LinuxZarfPath. Skipping download." -ForegroundColor Green
 } else {
     Write-Host "Downloading from: $LinuxZarfUrl" -ForegroundColor Gray
     try {
@@ -61,13 +67,13 @@ if (Test-Path $LinuxZarfPath) {
     }
 }
 
-# 5. Download matching Zarf Init Package (Required for offline K3s setup!)
+# 5. Download matching Zarf Init Package to Local Cache (Required for offline K3s setup!)
 Write-Host "`n[*] Step 3b: Downloading matching Zarf Init Package (amd64)..." -ForegroundColor Yellow
 $ZarfInitPkgUrl = "https://github.com/zarf-dev/zarf/releases/download/$ZarfVersion/zarf-init-amd64-${ZarfVersion}.tar.zst"
-$ZarfInitPkgPath = "$ProjectRoot\zarf-init-amd64-${ZarfVersion}.tar.zst"
+$ZarfInitPkgPath = "$CacheFolder\zarf-init-amd64-${ZarfVersion}.tar.zst"
 
 if (Test-Path $ZarfInitPkgPath) {
-    Write-Host "Local Zarf Init Package already exists at $ZarfInitPkgPath. Skipping download." -ForegroundColor Green
+    Write-Host "Cached Zarf Init Package exists at $ZarfInitPkgPath. Skipping download." -ForegroundColor Green
 } else {
     Write-Host "Downloading from: $ZarfInitPkgUrl" -ForegroundColor Gray
     try {
@@ -122,11 +128,11 @@ Get-ChildItem -Path "$ProjectRoot\scripts" | ForEach-Object {
     }
 }
 
-# Copy Linux Zarf binary to root of staging AND to scripts/ as zarf
+# Copy Linux Zarf binary from Cache to root of staging AND to scripts/ as zarf
 Copy-Item -Path $LinuxZarfPath -Destination "$StagingFolder\zarf" -Force
 Copy-Item -Path $LinuxZarfPath -Destination "$StagingFolder\scripts\zarf" -Force
 
-# Copy matching offline Zarf Init Package to root of staging so that "zarf init" works completely offline!
+# Copy matching offline Zarf Init Package from Cache to root of staging so that "zarf init" works completely offline!
 Copy-Item -Path $ZarfInitPkgPath -Destination "$StagingFolder\zarf-init-amd64-${ZarfVersion}.tar.zst" -Force
 
 # Copy configurations for reference

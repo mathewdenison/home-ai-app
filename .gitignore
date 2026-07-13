@@ -3,7 +3,7 @@
 
 # Staging & USB payloads
 /usb-payload/
-/zarf-linux-amd64
+/.cache/
 
 # Python caching and virtual environments
 __pycache__/
