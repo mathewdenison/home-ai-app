@@ -201,6 +201,23 @@ fi
 # Clean up any potential whitespace/newlines in LOCAL_IP
 LOCAL_IP=$(echo "$LOCAL_IP" | tr -d '[:space:]')
 
+# AIRGAPPED ROUTING COMPLIANCE (Default Route Workaround)
+# In isolated or offline enclaves, if no default gateway is configured in the OS, K3s (specifically the embedded
+# Kubernetes ChooseHostInterface prober) will fail to auto-detect the network and crash-loop with:
+# "no default routes found in '/proc/net/route' or '/proc/net/ipv6_route'"
+# To prevent this, if no default route is present, we automatically add a low-priority dummy default route pointing
+# to our local pipeline interface.
+if ! ip route | grep -q "^default"; then
+    echo "🌐 No default gateway found in routing table (required by K3s auto-detection)."
+    if [ -n "$LOCAL_IP" ] && [[ "$LOCAL_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        INTERFACE=$(ip -o addr show | grep "$LOCAL_IP" | head -n 1 | awk '{print $2}')
+        if [ -n "$INTERFACE" ]; then
+            echo "Adding fallback default route on $INTERFACE via $LOCAL_IP..."
+            ip route add default via "$LOCAL_IP" dev "$INTERFACE" metric 1000 || true
+        fi
+    fi
+fi
+
 # Write native K3s configuration with robust IPv4-only and interface-binding constraints.
 # Setting 'node-ip' guarantees K3s binds strictly to your direct Cat6 physical pipeline network interface,
 # completely preventing it from binding to public WAN or host-level Mullvad VPN virtual interfaces.
