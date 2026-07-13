@@ -60,8 +60,13 @@ JOIN_INFO_FILE="$USB_ROOT/cluster-join-info.env"
 if [ "$NODE_CHOICE" = "1" ]; then
     echo "Configuring as Beelink Gateway (Control Plane Server)..."
     
-    # Bootstrap control plane with registry, agent, and K3s
-    sudo zarf init --components k3s --confirm
+    # Pre-create and permanently configure K3s to use /opt/k3s-data, 
+    # completely bypassing strict DISA STIG noexec restrictions on /var/lib
+    sudo mkdir -p /etc/rancher/k3s /opt/k3s-data
+    echo "data-dir: /opt/k3s-data" | sudo tee /etc/rancher/k3s/config.yaml > /dev/null
+
+    # Bootstrap control plane with registry, agent, and K3s (setting ENV explicitly)
+    sudo K3S_DATA_DIR=/opt/k3s-data zarf init --components k3s --confirm
 
     echo "🚀 [3/3] Deploying Beelink Gateway AI Container Layer..."
     # Find and deploy Beelink-specific package
@@ -79,7 +84,7 @@ if [ "$NODE_CHOICE" = "1" ]; then
     kubectl apply -f ../gitops/base/observability-dashboards.yaml
 
     # Retrieve Join Token and IP
-    JOIN_TOKEN=$(sudo cat /var/lib/rancher/k3s/server/node-token 2>/dev/null || echo "PENDING")
+    JOIN_TOKEN=$(sudo cat /opt/k3s-data/server/node-token 2>/dev/null || echo "PENDING")
     
     # Intelligently find local network IP (preferring 10.x, 192.x, or 172.x subnets)
     LOCAL_IP=""
@@ -152,8 +157,13 @@ elif [ "$NODE_CHOICE" = "2" ]; then
         echo "✅ Network connectivity verified!"
     fi
 
-    # Bootstrap worker node in agent mode pointing to the Beelink Gateway
-    sudo zarf init --components k3s --set K3S_ARGS="agent --server https://${SERVER_IP}:6443 --token ${NODE_TOKEN}" --confirm
+    # Pre-create and permanently configure K3s to use /opt/k3s-data, 
+    # completely bypassing strict DISA STIG noexec restrictions on /var/lib
+    sudo mkdir -p /etc/rancher/k3s /opt/k3s-data
+    echo "data-dir: /opt/k3s-data" | sudo tee /etc/rancher/k3s/config.yaml > /dev/null
+
+    # Bootstrap worker node in agent mode pointing to the Beelink Gateway (setting ENV explicitly)
+    sudo K3S_DATA_DIR=/opt/k3s-data zarf init --components k3s --set K3S_ARGS="agent --server https://${SERVER_IP}:6443 --token ${NODE_TOKEN}" --confirm
 
     echo "🚀 [3/3] Deploying RTX 4090 Workstation GPU AI Container Layer..."
     # Find and deploy 4090-specific package
