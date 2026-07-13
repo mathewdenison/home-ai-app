@@ -47,6 +47,7 @@ components:
       - registry.k8s.io/ingress-nginx/kube-webhook-certgen:v20221220-controller-v1.5.1-58-g787ea74b6
       - quay.io/thanos/thanos:v0.35.1
       - quay.io/kiwigrid/k8s-sidecar:1.27.0
+      - quay.io/kiwigrid/k8s-sidecar:1.26.1
       - docker.io/library/busybox:latest
       - docker.io/library/alpine:latest
 
@@ -56,8 +57,14 @@ components:
     actions:
       onDeploy:
         after:
-          # Step 1: Wait for the OpenBao pod to be fully up and responsive
-          - cmd: "kubectl wait --namespace ai-enclave --for=condition=Ready pod/openbao-0 --timeout=120s"
+          # Step 1: Resiliently wait for the OpenBao pod to exist and then reach Ready state
+          - cmd: |
+              echo "⏳ Waiting for OpenBao pod to appear..."
+              until kubectl get pod openbao-0 -n ai-enclave >/dev/null 2>&1; do
+                sleep 2
+              done
+              echo "🚀 Pod detected. Waiting for readiness..."
+              kubectl wait --namespace ai-enclave --for=condition=Ready pod/openbao-0 --timeout=300s
           
           # Step 2: Securely initialize, save keys to USB, and generate an in-cluster Secret
           - cmd: |
