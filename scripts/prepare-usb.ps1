@@ -87,39 +87,23 @@ if (Test-Path $StagingFolder) {
 }
 New-Item -Path $StagingFolder -ItemType Directory -Force | Out-Null
 
-# 7. Build Beelink Package
-Write-Host "`n[*] Step 5: Compiling Beelink Gateway Zarf package (amd64)..." -ForegroundColor Yellow
-& $ZarfBin package create "$ProjectRoot\bootstrap\zarf-beelink.yaml" --architecture amd64 --confirm
+# 7. Build Beelink Package Directly to Staging
+Write-Host "`n[*] Step 5: Compiling Beelink Gateway Zarf package directly to staging..." -ForegroundColor Yellow
+& $ZarfBin package create "$ProjectRoot\bootstrap\zarf-beelink.yaml" --output "$StagingFolder" --architecture amd64 --confirm
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to compile Beelink package."
     exit $LASTEXITCODE
 }
+Write-Host "Beelink Gateway package compiled successfully inside $StagingFolder." -ForegroundColor Green
 
-# Move Beelink Package to Staging
-$BeelinkPkg = Get-ChildItem -Path $ProjectRoot -Filter "zarf-package-sovereign-ai-enclave-beelink-amd64-*.tar.zst" | Select-Object -First 1
-if ($BeelinkPkg) {
-    Move-Item -Path $BeelinkPkg.FullName -Destination $StagingFolder -Force
-    Write-Host "Moved Beelink package to staging folder." -ForegroundColor Green
-} else {
-    Write-Warning "Could not find compiled Beelink package tarball!"
-}
-
-# 8. Build 4090 Package
-Write-Host "`n[*] Step 6: Compiling 4090 Workstation Zarf package (amd64)..." -ForegroundColor Yellow
-& $ZarfBin package create "$ProjectRoot\bootstrap\zarf-4090.yaml" --architecture amd64 --confirm
+# 8. Build 4090 Package Directly to Staging
+Write-Host "`n[*] Step 6: Compiling 4090 Workstation Zarf package directly to staging..." -ForegroundColor Yellow
+& $ZarfBin package create "$ProjectRoot\bootstrap\zarf-4090.yaml" --output "$StagingFolder" --architecture amd64 --confirm
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to compile 4090 Workstation package."
     exit $LASTEXITCODE
 }
-
-# Move 4090 Package to Staging
-$WorkstationPkg = Get-ChildItem -Path $ProjectRoot -Filter "zarf-package-sovereign-ai-enclave-4090-amd64-*.tar.zst" | Select-Object -First 1
-if ($WorkstationPkg) {
-    Move-Item -Path $WorkstationPkg.FullName -Destination $StagingFolder -Force
-    Write-Host "Moved 4090 Workstation package to staging folder." -ForegroundColor Green
-} else {
-    Write-Warning "Could not find compiled 4090 Workstation package tarball!"
-}
+Write-Host "4090 Workstation package compiled successfully inside $StagingFolder." -ForegroundColor Green
 
 # 9. Copy Scripts and Files to Staging
 Write-Host "`n[*] Step 7: Staging deployment scripts and binaries..." -ForegroundColor Yellow
