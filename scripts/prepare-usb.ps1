@@ -162,7 +162,7 @@ Write-Host "`n[*] Step 7: Staging deployment scripts and binaries..." -Foregroun
 
 # Copy Scripts folder and ensure all Linux scripts have Unix (LF) line endings and NO UTF-8 BOM!
 New-Item -ItemType Directory -Path "$StagingFolder\scripts" -Force | Out-Null
-$Utf8NoBom = New-Object System.Text.Encoding+UTF8Encoding($false)
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 Get-ChildItem -Path "$ProjectRoot\scripts" | ForEach-Object {
     $TargetFile = "$StagingFolder\scripts\$($_.Name)"
