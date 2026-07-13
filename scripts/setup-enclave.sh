@@ -243,6 +243,14 @@ if ! ip route | grep -q "^default"; then
     fi
 fi
 
+# SILENCE VERBOSE KERNEL NETWORKING CONSOLE SPAM
+# Whenever virtual ethernet links (veth*) or CNI bridge ports are created, brought up, or attached,
+# the Linux kernel net core writes status messages directly to /dev/kmsg, which spams the active terminal console.
+# We set kernel.printk console loglevel to 3 (errors only) to permanently silence this CNI/veth console spam, 
+# while still allowing historical logs to be captured by systemd-journald.
+echo "🤫 Silencing kernel CNI/veth network interface console messages..."
+sysctl -w kernel.printk="3 4 1 7" >/dev/null 2>&1 || true
+
 # Write native K3s configuration with robust IPv4-only and interface-binding constraints.
 # Setting 'node-ip' guarantees K3s binds strictly to your direct Cat6 physical pipeline network interface,
 # completely preventing it from binding to public WAN or host-level Mullvad VPN virtual interfaces.
