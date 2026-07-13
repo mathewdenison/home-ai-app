@@ -198,14 +198,24 @@ if [ -z "$LOCAL_IP" ]; then
     LOCAL_IP=$(hostname -I | awk '{print $1}')
 fi
 
+# Clean up any potential whitespace/newlines in LOCAL_IP
+LOCAL_IP=$(echo "$LOCAL_IP" | tr -d '[:space:]')
+
 # Write native K3s configuration with robust IPv4-only and interface-binding constraints.
-# Setting 'node-ip' guarantees K3s binds strictly to your direct Cat6 pipeline network interface,
+# Setting 'node-ip' guarantees K3s binds strictly to your direct Cat6 physical pipeline network interface,
 # completely preventing it from binding to public WAN or host-level Mullvad VPN virtual interfaces.
+# If LOCAL_IP is empty or invalid, we skip node-ip to let K3s auto-detect, preventing startup crashes.
 cat <<EOF > /etc/rancher/k3s/config.yaml
 data-dir: /opt/k3s-data
-node-ip: "$LOCAL_IP"
 flannel-backend: vxlan
 EOF
+
+if [ -n "$LOCAL_IP" ] && [[ "$LOCAL_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "node-ip: \"$LOCAL_IP\"" >> /etc/rancher/k3s/config.yaml
+    echo "✅ Successfully bound K3s node-ip to local interface address: $LOCAL_IP"
+else
+    echo "⚠️ Warning: No valid local IPv4 address detected for interface binding. Skipping 'node-ip' configuration..."
+fi
 
 if [ "$NODE_CHOICE" = "1" ]; then
     echo "Configuring as Beelink Gateway (Control Plane Server)..."
@@ -232,7 +242,7 @@ if [ "$NODE_CHOICE" = "1" ]; then
     JOIN_TOKEN=$(cat /opt/k3s-data/server/node-token 2>/dev/null || echo "PENDING")
 
     # Write connection details to the USB drive for seamless plug-and-play join on Node 2!
-    if [ -d "$USB_ROOT" ] && [ "$JOIN_TOKEN" != "PENDING" ]; then
+    if [ -d "$USB_ROOT" ] && [ "$JOIN_TOKEN" != "PENDING" ] && [ -n "$LOCAL_IP" ] && [[ "$LOCAL_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         echo "Writing cluster join configuration to USB drive for the worker node..."
         echo "SERVER_IP=$LOCAL_IP" > "$JOIN_INFO_FILE"
         echo "NODE_TOKEN=$JOIN_TOKEN" >> "$JOIN_INFO_FILE"
