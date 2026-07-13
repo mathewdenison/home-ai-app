@@ -205,16 +205,30 @@ LOCAL_IP=$(echo "$LOCAL_IP" | tr -d '[:space:]')
 # In isolated or offline enclaves, if no default gateway is configured in the OS, K3s (specifically the embedded
 # Kubernetes ChooseHostInterface prober) will fail to auto-detect the network and crash-loop with:
 # "no default routes found in '/proc/net/route' or '/proc/net/ipv6_route'"
-# To prevent this, if no default route is present, we automatically add a low-priority dummy default route pointing
-# to our local pipeline interface.
+# To prevent this, we scan the routing table and if no default route is found, we dynamically identify the first
+# active physical network interface and add a fallback local route pointing to its own IP address.
 if ! ip route | grep -q "^default"; then
     echo "🌐 No default gateway found in routing table (required by K3s auto-detection)."
-    if [ -n "$LOCAL_IP" ] && [[ "$LOCAL_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        INTERFACE=$(ip -o addr show | grep "$LOCAL_IP" | head -n 1 | awk '{print $2}')
-        if [ -n "$INTERFACE" ]; then
-            echo "Adding fallback default route on $INTERFACE via $LOCAL_IP..."
-            ip route add default via "$LOCAL_IP" dev "$INTERFACE" metric 1000 || true
+    
+    # Scan for the first active non-loopback, non-virtual IPv4 interface on the host
+    ACTIVE_IFACE=""
+    ACTIVE_IP=""
+    for line in $(ip -o -4 addr show | awk '{print $2":"$4}'); do
+        iface=$(echo "$line" | cut -d: -f1)
+        ip_with_mask=$(echo "$line" | cut -d: -f2)
+        ip=$(echo "$ip_with_mask" | cut -d/ -f1)
+        
+        # Filter out local loopback, docker, tailscale, and CNI virtual interfaces
+        if [ "$iface" != "lo" ] && [[ "$iface" != docker* ]] && [[ "$iface" != veth* ]] && [[ "$iface" != flano* ]] && [[ "$iface" != cni* ]] && [[ "$iface" != tailscale* ]]; then
+            ACTIVE_IFACE="$iface"
+            ACTIVE_IP="$ip"
+            break
         fi
+    done
+    
+    if [ -n "$ACTIVE_IFACE" ] && [ -n "$ACTIVE_IP" ]; then
+        echo "Adding fallback local default route on $ACTIVE_IFACE via $ACTIVE_IP..."
+        ip route add default via "$ACTIVE_IP" dev "$ACTIVE_IFACE" metric 1000 || true
     fi
 fi
 
