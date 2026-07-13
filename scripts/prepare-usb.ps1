@@ -160,15 +160,17 @@ if ($ScriptsOnly) {
 # 9. Copy Scripts and Files to Staging
 Write-Host "`n[*] Step 7: Staging deployment scripts and binaries..." -ForegroundColor Yellow
 
-# Copy Scripts folder and ensure all Linux scripts have Unix (LF) line endings!
+# Copy Scripts folder and ensure all Linux scripts have Unix (LF) line endings and NO UTF-8 BOM!
 New-Item -ItemType Directory -Path "$StagingFolder\scripts" -Force | Out-Null
+$Utf8NoBom = New-Object System.Text.Encoding+UTF8Encoding($false)
+
 Get-ChildItem -Path "$ProjectRoot\scripts" | ForEach-Object {
     $TargetFile = "$StagingFolder\scripts\$($_.Name)"
     if ($_.Extension -eq ".sh" -or $_.Name -eq "gcert") {
-        # Convert CRLF to LF for Unix system compatibility
+        # Convert CRLF to LF and save using custom UTF8 (No BOM) for absolute Linux/Bash compatibility
         $Content = [System.IO.File]::ReadAllText($_.FullName)
         $Content = $Content -replace "`r`n", "`n"
-        [System.IO.File]::WriteAllText($TargetFile, $Content, [System.Text.Encoding]::UTF8)
+        [System.IO.File]::WriteAllText($TargetFile, $Content, $Utf8NoBom)
     } else {
         Copy-Item -Path $_.FullName -Destination $TargetFile -Force
     }
