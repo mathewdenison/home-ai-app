@@ -132,11 +132,12 @@ if ($ScriptsOnly) {
 }
 
 # 7. Build Beelink Package Directly to Staging (Skip if scripts-only)
+# Note: Adding '--skip-sbom' cuts package compilation time in half by bypassing security scanning!
 if ($ScriptsOnly) {
     Write-Host "`n[*] Step 5: Skipping Beelink Gateway package compilation (Scripts-Only Mode)." -ForegroundColor Gray
 } else {
     Write-Host "`n[*] Step 5: Compiling Beelink Gateway Zarf package directly to staging..." -ForegroundColor Yellow
-    & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-beelink.yaml" --output "$StagingFolder" --architecture amd64 --confirm
+    & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-beelink.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Failed to compile Beelink package."
         exit $LASTEXITCODE
@@ -145,11 +146,12 @@ if ($ScriptsOnly) {
 }
 
 # 8. Build 4090 Package Directly to Staging (Skip if scripts-only)
+# Note: Adding '--skip-sbom' cuts package compilation time in half by bypassing security scanning!
 if ($ScriptsOnly) {
     Write-Host "`n[*] Step 6: Skipping 4090 Workstation package compilation (Scripts-Only Mode)." -ForegroundColor Gray
 } else {
     Write-Host "`n[*] Step 6: Compiling 4090 Workstation Zarf package directly to staging..." -ForegroundColor Yellow
-    & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-4090.yaml" --output "$StagingFolder" --architecture amd64 --confirm
+    & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-4090.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Failed to compile 4090 Workstation package."
         exit $LASTEXITCODE
