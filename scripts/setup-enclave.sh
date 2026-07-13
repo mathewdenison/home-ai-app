@@ -18,7 +18,7 @@ fi
 # Detect previous failed or existing installations and offer to purge them
 # This is critical because a previous failed run writes the default systemd unit files 
 # pointing to /var/lib/rancher/k3s which must be deleted to apply the /opt/k3s-data redirect!
-if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-uninstall.sh" ] || [ -f "/etc/systemd/system/k3s.service" ] || [ -f "/etc/systemd/system/k3s-agent.service" ]; then
+if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-uninstall.sh" ] || [ -f "/etc/systemd/system/k3s.service" ] || [ -f "/etc/systemd/system/k3s-agent.service" ] || mountpoint -q /var/lib/rancher/k3s; then
     echo ""
     echo "⚠️ Warning: An existing or previous failed K3s/Zarf installation was detected!"
     echo "To apply the new STIG-compliant /opt/k3s-data path, we must completely purge previous attempts."
@@ -42,6 +42,15 @@ if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-un
             echo "Running k3s-agent-uninstall.sh..."
             /usr/local/bin/k3s-agent-uninstall.sh || true
         fi
+
+        # Safely unmount any active bind mounts
+        if mountpoint -q /var/lib/rancher/k3s; then
+            echo "Unmounting /var/lib/rancher/k3s..."
+            umount /var/lib/rancher/k3s || umount -l /var/lib/rancher/k3s || true
+        fi
+
+        # Clean fstab entries
+        sed -i '\/var\/lib\/rancher\/k3s/d' /etc/fstab 2>/dev/null || true
 
         # Completely purge all residual data, configurations, and systemd units
         echo "Cleaning residual directories..."
@@ -118,17 +127,28 @@ fi
 
 JOIN_INFO_FILE="$USB_ROOT/cluster-join-info.env"
 
+# PRE-INSTALLATION BIND MOUNT COMPLIANCE
+# To bypass BOTH /var noexec and SELinux's strict context path enforcement (which only targets /var/lib/rancher/k3s),
+# we utilize a BIND MOUNT. K3s operates out of its default SELinux-approved path, but the kernel physically writes 
+# and executes the binaries from /opt/k3s-data (which allows execution!).
+echo "🔗 Configuring STIG-compliant bind mount for cluster data directories..."
+mkdir -p /opt/k3s-data
+mkdir -p /var/lib/rancher/k3s
+
+if ! mountpoint -q /var/lib/rancher/k3s; then
+    mount --bind /opt/k3s-data /var/lib/rancher/k3s
+fi
+
+# Persist the bind mount across node reboots in fstab
+if ! grep -q "/var/lib/rancher/k3s" /etc/fstab; then
+    echo "/opt/k3s-data /var/lib/rancher/k3s none bind 0 0" >> /etc/fstab
+fi
+
 if [ "$NODE_CHOICE" = "1" ]; then
     echo "Configuring as Beelink Gateway (Control Plane Server)..."
-    
-    # Pre-create and permanently configure K3s to use /opt/k3s-data, 
-    # completely bypassing strict DISA STIG noexec restrictions on /var/lib
-    mkdir -p /etc/rancher/k3s /opt/k3s-data
-    echo "data-dir: /opt/k3s-data" > /etc/rancher/k3s/config.yaml
 
-    # Bootstrap control plane with registry, agent, and K3s (setting ENV explicitly)
-    # Note: Running without 'sudo' inside the script to preserve path and local env context cleanly
-    K3S_DATA_DIR=/opt/k3s-data zarf init --components k3s --confirm
+    # Bootstrap control plane with registry, agent, and K3s natively out of default path
+    zarf init --components k3s --confirm
 
     echo "🚀 [3/3] Deploying Beelink Gateway AI Container Layer..."
     # Find and deploy Beelink-specific package
@@ -145,8 +165,8 @@ if [ "$NODE_CHOICE" = "1" ]; then
     kubectl apply -f ../gitops/base/network-policy.yaml
     kubectl apply -f ../gitops/base/observability-dashboards.yaml
 
-    # Retrieve Join Token and IP
-    JOIN_TOKEN=$(cat /opt/k3s-data/server/node-token 2>/dev/null || echo "PENDING")
+    # Retrieve Join Token and IP natively
+    JOIN_TOKEN=$(cat /var/lib/rancher/k3s/server/node-token 2>/dev/null || echo "PENDING")
     
     # Intelligently find local network IP (preferring 10.x, 192.x, or 172.x subnets)
     LOCAL_IP=""
@@ -219,13 +239,8 @@ elif [ "$NODE_CHOICE" = "2" ]; then
         echo "✅ Network connectivity verified!"
     fi
 
-    # Pre-create and permanently configure K3s to use /opt/k3s-data, 
-    # completely bypassing strict DISA STIG noexec restrictions on /var/lib
-    mkdir -p /etc/rancher/k3s /opt/k3s-data
-    echo "data-dir: /opt/k3s-data" > /etc/rancher/k3s/config.yaml
-
-    # Bootstrap worker node in agent mode pointing to the Beelink Gateway (setting ENV explicitly)
-    K3S_DATA_DIR=/opt/k3s-data zarf init --components k3s --set K3S_ARGS="agent --server https://${SERVER_IP}:6443 --token ${NODE_TOKEN}" --confirm
+    # Bootstrap worker node in agent mode pointing to the Beelink Gateway natively
+    zarf init --components k3s --set K3S_ARGS="agent --server https://${SERVER_IP}:6443 --token ${NODE_TOKEN}" --confirm
 
     echo "🚀 [3/3] Deploying RTX 4090 Workstation GPU AI Container Layer..."
     # Find and deploy 4090-specific package
