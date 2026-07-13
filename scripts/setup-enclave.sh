@@ -1,8 +1,14 @@
 #!/bin/bash
 set -e
 
-# Ensure /usr/local/bin is in the system PATH (often excluded by default in STIG hardened environments)
+# Ensure /usr/local/bin and /usr/bin are at the front of the PATH context
 export PATH="/usr/local/bin:/usr/bin:$PATH"
+
+# Enforce that this script must be run as root (or via sudo)
+if [ "$EUID" -ne 0 ]; then
+    echo "❌ Error: This script must be run with root privileges (e.g. using sudo)."
+    exit 1
+fi
 
 echo "🔒 [1/3] Validating Host Operating System STIG Compliance Status..."
 if ! oscap xccdf eval --profile xccdf_org.ssgproject.content_profile_stig /usr/share/xml/scap/ssg/content/ssg-ubuntu2404-ds.xml > /dev/null 2>&1; then
@@ -11,7 +17,7 @@ fi
 
 echo "📦 [2/3] Initializing Zarf Local Cluster Layer..."
 
-# Auto-detect and install Zarf CLI if missing from system path
+# Auto-detect and install Zarf CLI if missing from standard system path
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! command -v zarf >/dev/null 2>&1; then
     echo "🔍 Zarf CLI not found in system PATH. Checking local directory for binary..."
@@ -27,16 +33,26 @@ if ! command -v zarf >/dev/null 2>&1; then
     fi
 
     if [ -n "$ZARF_BIN" ]; then
-        echo "🚀 Installing local Zarf binary to /usr/local/bin/zarf..."
-        sudo cp "$ZARF_BIN" /usr/local/bin/zarf
-        sudo chmod +x /usr/local/bin/zarf
-        # Also copy to /usr/bin/zarf as a robust fallback
-        sudo cp "$ZARF_BIN" /usr/bin/zarf
-        sudo chmod +x /usr/bin/zarf
+        echo "🚀 Installing local Zarf binary to system directories..."
+        cp "$ZARF_BIN" /usr/local/bin/zarf
+        chmod +x /usr/local/bin/zarf
+        # Also copy to /usr/bin/zarf as a robust fallback (ensures secure_path compliance under sudoers)
+        cp "$ZARF_BIN" /usr/bin/zarf
+        chmod +x /usr/bin/zarf
+        # Force bash to clear cached command paths
+        hash -r
     else
         echo "❌ Error: Zarf is not installed, and no Linux 'zarf' binary was found in this directory."
         echo "Please download the Linux amd64 static 'zarf' binary and place it in the same folder as this script on your USB."
         exit 1
+    fi
+else
+    # Even if Zarf is already installed somewhere, ensure a copy exists in /usr/bin/zarf
+    # to protect against secure_path restrictions on /usr/local/bin
+    if [ ! -f "/usr/bin/zarf" ]; then
+        cp "$(command -v zarf)" /usr/bin/zarf
+        chmod +x /usr/bin/zarf
+        hash -r
     fi
 fi
 
@@ -62,11 +78,12 @@ if [ "$NODE_CHOICE" = "1" ]; then
     
     # Pre-create and permanently configure K3s to use /opt/k3s-data, 
     # completely bypassing strict DISA STIG noexec restrictions on /var/lib
-    sudo mkdir -p /etc/rancher/k3s /opt/k3s-data
-    echo "data-dir: /opt/k3s-data" | sudo tee /etc/rancher/k3s/config.yaml > /dev/null
+    mkdir -p /etc/rancher/k3s /opt/k3s-data
+    echo "data-dir: /opt/k3s-data" > /etc/rancher/k3s/config.yaml
 
     # Bootstrap control plane with registry, agent, and K3s (setting ENV explicitly)
-    sudo K3S_DATA_DIR=/opt/k3s-data zarf init --components k3s --confirm
+    # Note: Running without 'sudo' inside the script to preserve path and local env context cleanly
+    K3S_DATA_DIR=/opt/k3s-data zarf init --components k3s --confirm
 
     echo "🚀 [3/3] Deploying Beelink Gateway AI Container Layer..."
     # Find and deploy Beelink-specific package
@@ -84,7 +101,7 @@ if [ "$NODE_CHOICE" = "1" ]; then
     kubectl apply -f ../gitops/base/observability-dashboards.yaml
 
     # Retrieve Join Token and IP
-    JOIN_TOKEN=$(sudo cat /opt/k3s-data/server/node-token 2>/dev/null || echo "PENDING")
+    JOIN_TOKEN=$(cat /opt/k3s-data/server/node-token 2>/dev/null || echo "PENDING")
     
     # Intelligently find local network IP (preferring 10.x, 192.x, or 172.x subnets)
     LOCAL_IP=""
@@ -159,11 +176,11 @@ elif [ "$NODE_CHOICE" = "2" ]; then
 
     # Pre-create and permanently configure K3s to use /opt/k3s-data, 
     # completely bypassing strict DISA STIG noexec restrictions on /var/lib
-    sudo mkdir -p /etc/rancher/k3s /opt/k3s-data
-    echo "data-dir: /opt/k3s-data" | sudo tee /etc/rancher/k3s/config.yaml > /dev/null
+    mkdir -p /etc/rancher/k3s /opt/k3s-data
+    echo "data-dir: /opt/k3s-data" > /etc/rancher/k3s/config.yaml
 
     # Bootstrap worker node in agent mode pointing to the Beelink Gateway (setting ENV explicitly)
-    sudo K3S_DATA_DIR=/opt/k3s-data zarf init --components k3s --set K3S_ARGS="agent --server https://${SERVER_IP}:6443 --token ${NODE_TOKEN}" --confirm
+    K3S_DATA_DIR=/opt/k3s-data zarf init --components k3s --set K3S_ARGS="agent --server https://${SERVER_IP}:6443 --token ${NODE_TOKEN}" --confirm
 
     echo "🚀 [3/3] Deploying RTX 4090 Workstation GPU AI Container Layer..."
     # Find and deploy 4090-specific package
