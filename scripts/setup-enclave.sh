@@ -15,6 +15,51 @@ if ! oscap xccdf eval --profile xccdf_org.ssgproject.content_profile_stig /usr/s
     echo "⚠️ Warning: Host OS has open STIG compliance alerts. Continuing configuration..."
 fi
 
+# Detect previous failed or existing installations and offer to purge them
+# This is critical because a previous failed run writes the default systemd unit files 
+# pointing to /var/lib/rancher/k3s which must be deleted to apply the /opt/k3s-data redirect!
+if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-uninstall.sh" ] || [ -f "/etc/systemd/system/k3s.service" ] || [ -f "/etc/systemd/system/k3s-agent.service" ]; then
+    echo ""
+    echo "⚠️ Warning: An existing or previous failed K3s/Zarf installation was detected!"
+    echo "To apply the new STIG-compliant /opt/k3s-data path, we must completely purge previous attempts."
+    read -p "Would you like to purge previous K3s/Zarf installations and files now? [y/N]: " PURGE_CHOICE
+    echo ""
+    if [[ "$PURGE_CHOICE" =~ ^[Yy]$ ]]; then
+        echo "🧹 Purging previous K3s and Zarf cluster state..."
+        
+        # Run Zarf's built-in destroy command if available
+        if command -v zarf >/dev/null 2>&1; then
+            echo "Running zarf destroy..."
+            zarf destroy --confirm || true
+        fi
+
+        # Run native K3s uninstall scripts if they exist
+        if [ -f "/usr/local/bin/k3s-uninstall.sh" ]; then
+            echo "Running k3s-uninstall.sh..."
+            /usr/local/bin/k3s-uninstall.sh || true
+        fi
+        if [ -f "/usr/local/bin/k3s-agent-uninstall.sh" ]; then
+            echo "Running k3s-agent-uninstall.sh..."
+            /usr/local/bin/k3s-agent-uninstall.sh || true
+        fi
+
+        # Completely purge all residual data, configurations, and systemd units
+        echo "Cleaning residual directories..."
+        rm -rf /var/lib/rancher/k3s
+        rm -rf /etc/rancher/k3s
+        rm -rf /opt/k3s-data
+        rm -rf /var/lib/kubelet
+        rm -f /etc/systemd/system/k3s.service
+        rm -f /etc/systemd/system/k3s-agent.service
+        
+        # Reload systemd to apply service deletion
+        systemctl daemon-reload
+        
+        echo "✅ Previous state successfully purged! Ready for a fresh, clean install."
+        echo ""
+    fi
+fi
+
 echo "📦 [2/3] Initializing Zarf Local Cluster Layer..."
 
 # Auto-detect and install Zarf CLI if missing from standard system path
