@@ -169,7 +169,7 @@ Get-ChildItem -Path "$ProjectRoot\scripts" | ForEach-Object {
     if ($_.Extension -eq ".sh" -or $_.Name -eq "gcert") {
         # Convert CRLF to LF and save using custom UTF8 (No BOM) for absolute Linux/Bash compatibility
         $Content = [System.IO.File]::ReadAllText($_.FullName)
-        $Content = $Content -replace "`r`n", "`n"
+        $Content = $Content.Replace("`r", "")
         [System.IO.File]::WriteAllText($TargetFile, $Content, $Utf8NoBom)
     } else {
         Copy-Item -Path $_.FullName -Destination $TargetFile -Force
