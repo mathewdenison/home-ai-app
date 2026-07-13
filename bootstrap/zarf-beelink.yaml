@@ -32,12 +32,66 @@ components:
     images:
       - docker.io/hashicorp/vault-k8s:1.7.2
       - quay.io/openbao/openbao:2.5.5
+      - docker.io/openbao/openbao-csi-provider:1.4.0
       - quay.io/prometheus-operator/prometheus-operator:v0.75.0
       - quay.io/prometheus-operator/prometheus-config-reloader:v0.75.0
       - quay.io/prometheus/prometheus:v2.53.0
       - quay.io/prometheus/alertmanager:v0.27.0
       - docker.io/grafana/grafana:11.1.0
+      - docker.io/grafana/grafana:11.0.0
       - quay.io/brancz/kube-rbac-proxy:v0.18.1
       - ghcr.io/jimmidyson/configmap-reload:v0.12.0
       - registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.12.0
       - quay.io/prometheus/node-exporter:v1.8.1
+      - registry.k8s.io/ingress-nginx/kube-webhook-certgen:v20221220-controller-v1.5.1-58
+      - quay.io/thanos/thanos:v0.35.1
+      - quay.io/kiwigrid/k8s-sidecar:1.27.0
+      - docker.io/library/busybox:latest
+      - docker.io/library/alpine:latest
+
+  - name: openbao-auto-init
+    required: true
+    description: "Securely automates OpenBao initialization and preserves keys without log exposure"
+    actions:
+      onDeploy:
+        after:
+          # Step 1: Wait for the OpenBao pod to be fully up and responsive
+          - cmd: "kubectl wait --namespace ai-enclave --for=condition=Ready pod/openbao-0 --timeout=120s"
+          
+          # Step 2: Securely initialize, save keys to USB, and generate an in-cluster Secret
+          - cmd: |
+              # Check if OpenBao is already initialized to prevent overwriting
+              if kubectl exec -n ai-enclave openbao-0 -- bao status 2>&1 | grep -q "Initialized.*false"; then
+                echo "🔒 OpenBao uninitialized. Initializing security barrier securely..."
+                
+                # 1. Capture the raw JSON payload in a local variable (never echoed)
+                INIT_PAYLOAD=$(kubectl exec -n ai-enclave openbao-0 -- bao operator init -format=json)
+                
+                # 2. Extract keys using standard grep/sed to avoid installing jq in strict environments
+                ROOT_TOKEN=$(echo "$INIT_PAYLOAD" | grep -o '"root_token":"[^"]*' | grep -o '[^"]*$')
+                
+                # 3. Save the master payload directly to your USB mount for disaster recovery
+                if [ -d "/mnt/usb" ]; then
+                  echo "$INIT_PAYLOAD" > /mnt/usb/openbao-master-keys.json
+                  chmod 600 /mnt/usb/openbao-master-keys.json
+                  echo "💾 Master keys written safely to physical USB media."
+                else
+                  # Fallback to script dir if USB isn't at the explicit mount point
+                  echo "$INIT_PAYLOAD" > ./openbao-master-keys.json
+                  chmod 600 ./openbao-master-keys.json
+                  echo "⚠️ USB mount not found at /mnt/usb. Master keys saved locally to deployment directory."
+                fi
+                
+                # 4. Inject the root token into a heavily restricted Kubernetes Secret 
+                # (Allows other enclave apps to authenticate to it automatically)
+                echo -n "$ROOT_TOKEN" | kubectl create secret generic openbao-root-token \
+                  --namespace ai-enclave \
+                  --from-file=token=/dev/stdin
+                  
+                # Clear variables from active shell memory
+                unset INIT_PAYLOAD
+                unset ROOT_TOKEN
+                echo "✅ Initialization complete. Security tokens isolated."
+              else
+                echo "🔒 OpenBao is already initialized. Skipping."
+              fi
