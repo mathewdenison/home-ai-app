@@ -154,6 +154,9 @@ allow perm=any all : dir=/opt/k3s-data/
 allow perm=any all : dir=/opt/cni/
 allow perm=any all : dir=/run/k3s/
 allow perm=any all : dir=/var/lib/kubelet/
+allow perm=any all : dir=/run/containerd/
+allow perm=any all : dir=/var/lib/containerd/
+allow perm=any all : dir=/var/lib/rancher/
 EOF
     # Load rules and restart fapolicyd daemon if active
     if command -v fagenrules >/dev/null 2>&1; then
