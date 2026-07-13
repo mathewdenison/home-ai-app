@@ -10,7 +10,7 @@ echo "📦 [2/3] Initializing Zarf Local Cluster Layer..."
 
 # Auto-detect and install Zarf CLI if missing from system path
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if ! command -v zarf &> /dev/null; then
+if ! command -v zarf >/dev/null 2>&1; then
     echo "🔍 Zarf CLI not found in system PATH. Checking local directory for binary..."
     
     # Check if a local 'zarf' binary exists in current dir (on USB) or script's directory

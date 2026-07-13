@@ -136,41 +136,79 @@ git config --global commit.gpgsign true
 docker exec -it headscale-core headscale users create ai-user
 ```
 
-### Execution Step 1: Bake the Automated Installation Medium
-Run this workflow on an internet-connected developer machine to compile the offline bundle and write the custom Kickstart automated OS image to your target USB drive.
+### Execution Step 1: Prepare and Bake the Offline USB Payload
+Run this automated workflow on an internet-connected Windows developer machine to synchronize versions, download the required Linux binaries, compile the offline Zarf packages, and organize the files for staging.
 
-1. **Compile the Node-Specific Zarf Hermetic Tarballs**:
-Compile separate packages optimized for each physical machine:
-```bash
-# Compile package for the Beelink core gateway and control plane
-zarf package create bootstrap/zarf-beelink.yaml --architecture amd64 --confirm
+1. **Automated Windows USB Staging Utility (`scripts/prepare-usb.ps1`)**:
+   Run the newly created PowerShell utility from your Windows terminal:
+   ```powershell
+   .\scripts\prepare-usb.ps1
+   ```
+   This script will automatically:
+   - Synchronize versions across all manifests using your central `versions.yaml`.
+   - Detect your local Windows Zarf version and auto-download the matching Linux `amd64` `zarf` binary from GitHub.
+   - Compile both Zarf offline packages (`zarf-beelink` and `zarf-4090`) sequentially.
+   - Stage all compiled bundles, Linux binaries, and deployment scripts into a unified directory at `/usb-payload`.
 
-# Compile package for the 4090 Workstation GPU compute node
-zarf package create bootstrap/zarf-4090.yaml --architecture amd64 --confirm
-```
-2. **Flash the Unattended USB Drive**: Insert a blank flash drive and run the creation script (replace `/dev/sdX` with your exact target USB block path—do not target your primary system drive):
-```bash
-chmod +x scripts/bake-usb.sh
-sudo ./scripts/bake-usb.sh /dev/sdX
-```
-3. **Stage the AI Bundle**: Copy your newly compiled Zarf payloads (`*.tar.zst` for both Beelink and 4090) and the contents of the `scripts/` folder directly onto a root folder on that same USB drive.
+2. **Bake the Installation OS (Optional/First-Time Setup)**:
+   If you have a Linux machine available and need to make the bootable unattended Kickstart installer for Rocky Linux, use the flash provisioner:
+   ```bash
+   chmod +x scripts/bake-usb.sh
+   sudo ./scripts/bake-usb.sh /dev/sdX
+   ```
 
-### Execution Step 2: Unattended Hardware Node Provisioning
+3. **Stage the AI Payloads onto the USB**:
+   Format your USB flash drive (FAT32/exFAT) and copy **all contents** of the generated `/usb-payload` directory directly to the root of your USB drive. Your USB will now contain:
+   - `zarf` (the static Linux Zarf binary)
+   - `zarf-package-sovereign-ai-enclave-beelink-amd64-1.0.0.tar.zst`
+   - `zarf-package-sovereign-ai-enclave-4090-amd64-1.0.0.tar.zst`
+   - `scripts/` (including the target node installer `setup-enclave.sh`)
+   - `versions.yaml`
+
+### Execution Step 2: Unattended Hardware Node Provisioning & Clustering
 1. **Install the Host Operating System**: Insert the baked USB drive into your new Beelink server (or your 4090 Workstation Linux partition) and boot from it. The machine will instantly parse `bootstrap/enclave-kickstart.cfg` and configure the hardware automatically:
    - Enforces the official DISA STIG system profile limits.
    - Wipes target sectors and automatically binds drives into a mirrored Btrfs RAID 1 storage pool.
    - Binds static IP parameters to the physical direct Cat6 pipeline interface.
    - Auto-reboots the machine into a finalized, pristine terminal screen upon completion.
-2. **Bootstrap the AI Cluster Engine**: Log in with your temporary password and run the local execution wrapper directly from the mounted USB drive to deploy your workloads:
-```bash
-sudo mount /dev/sdb1 /mnt
-cd /mnt/scripts && ./setup-enclave.sh
-```
-3. **Extract Node Security Verification Tokens**: Pull down your node registration token string:
-```bash
-sudo cat /var/lib/rancher/k3s/server/node-token
-```
-4. **Approve Cluster Entry via Your Phone**: The machines will check in and immediately drop into a blocked Headscale network mesh pending queue. Intercept the unique fingerprint token from your phone alert log (ntfy/Gotify), and whitelist your nodes:
+
+2. **Manually Authorize the USB on Hardened OS**:
+   Since the STIG-hardened OS blocks USB storage and utilizes **USBGuard**, you must manually unblock it on your server console before mounting:
+   ```bash
+   # List blocked USB devices and find your drive's ID (e.g., 5)
+   sudo usbguard list-devices
+   
+   # Temporarily allow the USB drive
+   sudo usbguard allow-device <ID>
+   ```
+
+3. **Mount the USB and Deploy Beelink Gateway (Node 1 - Control Plane)**:
+   Plug your USB drive into your Beelink Gateway, mount it, and run the enclave setup script:
+   ```bash
+   sudo mkdir -p /mnt/usb
+   sudo mount /dev/sdb1 /mnt/usb
+   cd /mnt/usb
+   sudo ./scripts/setup-enclave.sh
+   ```
+   - Select **Option 1 (Beelink Gateway)** when prompted.
+   - The script will auto-install the Linux `zarf` binary from the USB to `/usr/local/bin/zarf`.
+   - It bootstraps the main K3s server, local registry, and deploys the core AI containers.
+   - Finally, it writes the server's local IP and join token to `cluster-join-info.env` directly onto your USB drive.
+
+4. **Plug-and-Play Deploy RTX 4090 Workstation (Node 2 - Worker Node)**:
+   Safely unmount the USB from your Beelink Gateway, plug it into your RTX 4090 Workstation node, manually unblock USBGuard, mount it, and run the same setup script:
+   ```bash
+   sudo mkdir -p /mnt/usb
+   sudo mount /dev/sdb1 /mnt/usb
+   cd /mnt/usb
+   sudo ./scripts/setup-enclave.sh
+   ```
+   - Select **Option 2 (RTX 4090 Workstation)** when prompted.
+   - **Auto-Discovery**: The script will automatically load the Beelink Gateway's IP and Join Token directly from the USB!
+   - **Pre-flight Connection Verification**: It will run a TCP handshake check on port `6443` to ensure the direct Cat6 ethernet connection to the Beelink is fully operational before executing any changes.
+   - It auto-installs `zarf`, registers the node to the existing cluster in pure agent mode, and deploys the high-throughput GPU workloads (`vllm`, `speaches`, `comfyui`).
+
+5. **Approve Cluster Entry via Your Phone**: The machines will check in and immediately drop into a blocked Headscale network mesh pending queue. Intercept the unique fingerprint token from your phone alert log (ntfy/Gotify), and whitelist your nodes:
 ```bash
 docker exec -it headscale-core headscale auth register --user ai-user --auth-id [FINGERPRINT_ID]
 ```
@@ -190,6 +228,9 @@ Included in the repo paths `bootstrap/zarf-beelink.yaml` and `bootstrap/zarf-409
 
 ### Day-Zero Automated Bootstrap Setup Script (`scripts/setup-enclave.sh`)
 Included in the repo path `scripts/setup-enclave.sh`.
+
+### Windows Dev Workstation USB Preparation Utility (`scripts/prepare-usb.ps1`)
+Included in the repo path `scripts/prepare-usb.ps1`.
 
 ### Core Application Declarative Specification (`gitops/base/enclave-apps.yaml`)
 Included in the repo path `gitops/base/enclave-apps.yaml`.

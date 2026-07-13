@@ -105,8 +105,19 @@ if ($WorkstationPkg) {
 # 8. Copy Scripts and Files to Staging
 Write-Host "`n[*] Step 7: Staging deployment scripts and binaries..." -ForegroundColor Yellow
 
-# Copy Scripts folder
-Copy-Item -Path "$ProjectRoot\scripts" -Destination "$StagingFolder\scripts" -Recurse -Force
+# Copy Scripts folder and ensure all Linux scripts have Unix (LF) line endings!
+New-Item -ItemType Directory -Path "$StagingFolder\scripts" -Force | Out-Null
+Get-ChildItem -Path "$ProjectRoot\scripts" | ForEach-Object {
+    $TargetFile = "$StagingFolder\scripts\$($_.Name)"
+    if ($_.Extension -eq ".sh" -or $_.Name -eq "gcert") {
+        # Convert CRLF to LF for Unix system compatibility
+        $Content = [System.IO.File]::ReadAllText($_.FullName)
+        $Content = $Content -replace "`r`n", "`n"
+        [System.IO.File]::WriteAllText($TargetFile, $Content, [System.Text.Encoding]::UTF8)
+    } else {
+        Copy-Item -Path $_.FullName -Destination $TargetFile -Force
+    }
+}
 
 # Copy Linux Zarf binary to root of staging AND to scripts/ as zarf
 Copy-Item -Path $LinuxZarfPath -Destination "$StagingFolder\zarf" -Force
