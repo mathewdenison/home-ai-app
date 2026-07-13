@@ -185,18 +185,23 @@ else
     chcon -R -t container_var_lib_t /opt/k3s-data 2>/dev/null || true
 fi
 
-# Intelligently find local network IP (preferring 10.x, 192.x, or 172.x subnets)
-# This represents the direct Cat6 physical pipeline used for node-to-node cluster communication.
+# Intelligently find local network IP using standard 'ip addr show'
+# This is completely immune to hostname lookup blocks standard on STIG-hardened environments.
+# Filters out local loopback (127.0.0.1) and K3s/Docker bridge subnets, selecting the first active host IP.
 LOCAL_IP=""
-for ip in $(hostname -I); do
-    if [[ "$ip" =~ ^10\. ]] || [[ "$ip" =~ ^192\.168\. ]] || [[ "$ip" =~ ^172\. ]]; then
-        LOCAL_IP="$ip"
-        break
+for ip_entry in $(ip -o -4 addr show | awk '{print $4}' | cut -d/ -f1); do
+    if [ "$ip_entry" != "127.0.0.1" ] && [[ "$ip_entry" != 172.17.* ]] && [[ "$ip_entry" != 10.42.* ]]; then
+        # Prefer standard private network ranges (10.x, 192.168.x, 172.x)
+        if [[ "$ip_entry" =~ ^10\. ]] || [[ "$ip_entry" =~ ^192\.168\. ]] || [[ "$ip_entry" =~ ^172\. ]]; then
+            LOCAL_IP="$ip_entry"
+            break
+        fi
+        # Fallback to the first non-loopback IP found if no standard private range matches
+        if [ -z "$LOCAL_IP" ]; then
+            LOCAL_IP="$ip_entry"
+        fi
     fi
 done
-if [ -z "$LOCAL_IP" ]; then
-    LOCAL_IP=$(hostname -I | awk '{print $1}')
-fi
 
 # Clean up any potential whitespace/newlines in LOCAL_IP
 LOCAL_IP=$(echo "$LOCAL_IP" | tr -d '[:space:]')
