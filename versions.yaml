@@ -4,12 +4,12 @@
 
 images:
   open_webui: "ghcr.io/open-webui/open-webui:main"
-  searxng: "searxng/searxng:latest"
-  vllm: "vllm/vllm-openai:latest"
-  python_sandbox: "python:3.11-slim"
+  searxng: "docker.io/searxng/searxng:latest"
+  vllm: "docker.io/vllm/vllm-openai:latest"
+  python_sandbox: "docker.io/library/python:3.11-slim"
   openedai_speech: "ghcr.io/matatonic/openedai-speech:latest"
   comfyui: "ghcr.io/ai-dock/comfyui:latest-cuda"
-  ollama: "ollama/ollama:latest"
+  ollama: "docker.io/ollama/ollama:latest"
   litellm: "ghcr.io/berriai/litellm:latest"
 
 charts:

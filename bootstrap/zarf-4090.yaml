@@ -9,10 +9,10 @@ components:
     required: true
     description: "Bundled high-throughput GPU inference, voice synthesis, and image generation container images"
     images:
-      - vllm/vllm-openai:latest
+      - docker.io/vllm/vllm-openai:latest
       - ghcr.io/matatonic/openedai-speech:latest
       - ghcr.io/ai-dock/comfyui:latest-cuda
-      - python:3.11-slim
+      - docker.io/library/python:3.11-slim
 
   - name: infrastructure-helm-charts
     required: true

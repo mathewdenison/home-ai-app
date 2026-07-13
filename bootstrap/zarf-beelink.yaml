@@ -10,10 +10,10 @@ components:
     description: "Bundled control-plane, gateway, and local CPU-based 70B inference container images"
     images:
       - ghcr.io/open-webui/open-webui:main
-      - searxng/searxng:latest
-      - ollama/ollama:latest
+      - docker.io/searxng/searxng:latest
+      - docker.io/ollama/ollama:latest
       - ghcr.io/berriai/litellm:latest
-      - python:3.11-slim
+      - docker.io/library/python:3.11-slim
 
   - name: infrastructure-helm-charts
     required: true

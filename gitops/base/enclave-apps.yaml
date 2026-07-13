@@ -92,7 +92,7 @@ spec:
       runtimeClassName: runsc # Enforces strict Google gVisor user-space kernel translation boundaries
       containers:
         - name: searxng-engine
-          image: searxng/searxng:latest
+          image: docker.io/searxng/searxng:latest
           ports:
             - containerPort: 8080
           env:
@@ -142,7 +142,7 @@ spec:
         kubernetes.io/hostname: desktop-4090
       containers:
         - name: vllm-core
-          image: vllm/vllm-openai:latest
+          image: docker.io/vllm/vllm-openai:latest
           args: ["--model", "neuralmagic/DeepSeek-R1-Distill-Qwen-14B-AWQ", "--host", "0.0.0.0", "--port", "11434"]
           resources:
             limits:
@@ -174,7 +174,7 @@ spec:
       runtimeClassName: runsc # Enforces strict Google gVisor user-space kernel translation boundaries
       containers:
         - name: sandbox-runtime
-          image: python:3.11-slim
+          image: docker.io/library/python:3.11-slim
           command: ["sleep", "infinity"]
           securityContext:
             seccompProfile:
@@ -333,7 +333,7 @@ spec:
         node-role.kubernetes.io/control-plane: "true" # Schedules 70B model strictly on the powerful Beelink GTR9 Pro CPU/RAM
       containers:
         - name: ollama
-          image: ollama/ollama:latest
+          image: docker.io/ollama/ollama:latest
           ports:
             - containerPort: 11434
           resources:

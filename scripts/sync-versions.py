@@ -30,17 +30,17 @@ def load_versions(versions_path):
     return versions
 
 def update_images(content, versions):
-    """Replaces container image tags globally across standard layouts."""
+    """Replaces container image tags globally across standard layouts without duplicates."""
     # Maps internal identifiers in versions.yaml to actual repository prefixes
     replacements = [
-        (r'ghcr\.io/open-webui/open-webui:[^\s\n\r"\'`\]]+', versions['images.open_webui']),
-        (r'searxng/searxng:[^\s\n\r"\'`\]]+', versions['images.searxng']),
-        (r'vllm/vllm-openai:[^\s\n\r"\'`\]]+', versions['images.vllm']),
-        (r'python:[^\s\n\r"\'`\]]+', versions['images.python_sandbox']),
-        (r'ghcr\.io/matatonic/openedai-speech:[^\s\n\r"\'`\]]+', versions['images.openedai_speech']),
-        (r'ghcr\.io/ai-dock/comfyui:[^\s\n\r"\'`\]]+', versions['images.comfyui']),
-        (r'ollama/ollama:[^\s\n\r"\'`\]]+', versions['images.ollama']),
-        (r'ghcr\.io/berriai/litellm:[^\s\n\r"\'`\]]+', versions['images.litellm'])
+        (r'(?:ghcr\.io/)?open-webui/open-webui:[^\s\n\r"\'`\]]+', versions['images.open_webui']),
+        (r'(?:docker\.io/)?searxng/searxng:[^\s\n\r"\'`\]]+', versions['images.searxng']),
+        (r'(?:docker\.io/)?vllm/vllm-openai:[^\s\n\r"\'`\]]+', versions['images.vllm']),
+        (r'(?:docker\.io/(?:library/)?)?python:[^\s\n\r"\'`\]]+', versions['images.python_sandbox']),
+        (r'(?:ghcr\.io/)?matatonic/openedai-speech:[^\s\n\r"\'`\]]+', versions['images.openedai_speech']),
+        (r'(?:ghcr\.io/)?ai-dock/comfyui:[^\s\n\r"\'`\]]+', versions['images.comfyui']),
+        (r'(?:docker\.io/)?ollama/ollama:[^\s\n\r"\'`\]]+', versions['images.ollama']),
+        (r'(?:ghcr\.io/)?berriai/litellm:[^\s\n\r"\'`\]]+', versions['images.litellm'])
     ]
     for pattern, replacement in replacements:
         content = re.sub(pattern, replacement, content)
