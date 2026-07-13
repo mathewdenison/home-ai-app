@@ -1,0 +1,57 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: restrict-agent-sandbox-egress
+  namespace: ai-enclave
+spec:
+  podSelector:
+    matchLabels:
+      app: agent-sandbox
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: lite-llm # Grants API endpoint visibility while locking down cross-namespace pivot vectors
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: restrict-searxng-egress
+  namespace: ai-enclave
+spec:
+  podSelector:
+    matchLabels:
+      app: searxng
+  policyTypes:
+    - Egress
+  egress:
+    # Rule 1: Allow DNS resolution so SearXNG can lookup domains like google.com, wikipedia.org, etc.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Rule 2: Allow HTTP and HTTPS egress to the public internet via Mullvad,
+    # but strictly block RFC 1918 subnets to prevent SSRF or lateral internal port scanning.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8       # Block local cluster and Cat6 direct link subnet
+              - 172.16.0.0/12    # Block standard private Class B subnets
+              - 192.168.0.0/16   # Block standard home network Class C subnets
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443

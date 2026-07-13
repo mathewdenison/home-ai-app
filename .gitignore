@@ -1,0 +1,33 @@
+# Zarf Package Archives (Massive offline tarballs)
+*.tar.zst
+
+# Staging & USB payloads
+/usb-payload/
+/zarf-linux-amd64
+
+# Python caching and virtual environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.pytest_cache/
+
+# Local staging secrets & credentials (MUST NEVER BE TRACKED)
+secrets-payload.yaml
+secrets-payload.yml
+.env
+.env.*
+secrets.yaml
+
+# OS & Editor specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo

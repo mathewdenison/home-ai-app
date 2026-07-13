@@ -1,0 +1,530 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-enclave
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-webui
+  namespace: ai-enclave
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: open-webui
+  template:
+    metadata:
+      labels:
+        app: open-webui
+    spec:
+      containers:
+        - name: webui-frontend
+          image: ghcr.io/open-webui/open-webui:main
+          ports:
+            - containerPort: 8080
+          env:
+            - name: OPENAI_API_BASE_URL
+              value: "http://lite-llm-service.ai-enclave.svc.cluster.local:8000/v1"
+            - name: DEFAULT_MODELS
+              value: "sovereign-enclave-model"
+            - name: OPENID_PROVIDER_URL
+              value: "https://auth.internal-mesh.local/application/o/open-webui/.well-known/openid-configuration"
+            # --- Live Local RAG Web Search Configurations ---
+            - name: ENABLE_RAG_WEB_SEARCH
+              value: "true"
+            - name: RAG_WEB_SEARCH_ENGINE
+              value: "searxng"
+            - name: SEARXNG_QUERY_URL
+              value: "http://searxng.ai-enclave.svc.cluster.local:8080/search?q=<query>"
+            # --- Image Generation Configurations ---
+            - name: ENABLE_IMAGE_GENERATION
+              value: "true"
+            - name: IMAGE_GENERATION_ENGINE
+              value: "comfyui"
+            - name: IMAGE_GENERATION_API_BASE_URL
+              value: "http://comfyui-service.ai-enclave.svc.cluster.local:8188/"
+            # --- Continuous Voice Mode (STT/TTS) Configurations ---
+            - name: AUDIO_STT_ENGINE
+              value: "openai"
+            - name: AUDIO_STT_OPENAI_API_BASE_URL
+              value: "http://speaches-audio-service.ai-enclave.svc.cluster.local:8000/v1"
+            - name: AUDIO_STT_OPENAI_API_KEY
+              value: "local-enclave-key"
+            - name: AUDIO_TTS_ENGINE
+              value: "openai"
+            - name: AUDIO_TTS_OPENAI_API_BASE_URL
+              value: "http://speaches-audio-service.ai-enclave.svc.cluster.local:8000/v1"
+            - name: AUDIO_TTS_OPENAI_API_KEY
+              value: "local-enclave-key"
+            - name: AUDIO_TTS_MODEL
+              value: "speaches-ai/Kokoro-82M-v1.0-ONNX"
+            - name: AUDIO_TTS_VOICE
+              value: "am_eric"
+            # --- Advanced Token Lifecycle Controls ---
+            - name: ENABLE_WEBSOCKET_SUPPORT
+              value: "true"
+            - name: COOKIE_SECURE
+              value: "true"
+            - name: SESSION_COOKIE_DURATION
+              value: "2592000" # Browser access persistence window: 30 days
+            - name: JWT_EXPIRATION_DURATION
+              value: "43200" # CLI API lease duration profile: 12 hours
+          envFrom:
+            - secretRef:
+                name: runtime-injected-secrets
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: searxng
+  namespace: ai-enclave
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: searxng
+  template:
+    metadata:
+      labels:
+        app: searxng
+    spec:
+      runtimeClassName: runsc # Enforces strict Google gVisor user-space kernel translation boundaries
+      containers:
+        - name: searxng-engine
+          image: searxng/searxng:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SEARXNG_BASE_URL
+              value: "http://searxng.ai-enclave.svc.cluster.local:8080"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: searxng-tmp
+              mountPath: /tmp
+      volumes:
+        - name: searxng-tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: searxng
+  namespace: ai-enclave
+spec:
+  ports:
+    - port: 8080
+      targetPort: 8080
+  selector:
+    app: searxng
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-inference-engine
+  namespace: ai-enclave
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-engine
+  template:
+    metadata:
+      labels:
+        app: vllm-engine
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: desktop-4090
+      containers:
+        - name: vllm-core
+          image: vllm/vllm-openai:latest
+          args: ["--model", "neuralmagic/DeepSeek-R1-Distill-Qwen-14B-AWQ", "--host", "0.0.0.0", "--port", "11434"]
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - mountPath: /dev/shm
+              name: dshm # Bypasses Rocky's STIG non-execution lock via isolated RAM allocation
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-sandbox
+  namespace: ai-enclave
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-sandbox
+  template:
+    metadata:
+      labels:
+        app: agent-sandbox
+    spec:
+      runtimeClassName: runsc # Enforces strict Google gVisor user-space kernel translation boundaries
+      containers:
+        - name: sandbox-runtime
+          image: python:3.11-slim
+          command: ["sleep", "infinity"]
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault # Enforces system call filtering constraints
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10001
+          volumeMounts:
+            - name: codebase-volume
+              mountPath: /workspace
+              readOnly: true # Strict protection block: agents cannot alter project root scripts
+            - name: mutation-volume
+              mountPath: /workspace/output # Modifiable runtime arena dedicated for file creation tasks
+      volumes:
+        - name: codebase-volume
+          hostPath:
+            path: /home/admin/ai-hub/workspace
+        - name: mutation-volume
+          hostPath:
+            path: /home/admin/ai-hub/workspace/output
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: speaches-audio-engine
+  namespace: ai-enclave
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: speaches-engine
+  template:
+    metadata:
+      labels:
+        app: speaches-engine
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: desktop-4090 # Offloads fast audio synthesis to the GPU
+      containers:
+        - name: speaches-core
+          image: ghcr.io/matatonic/openedai-speech:latest # High-performance, OpenAI-compatible STT/TTS engine
+          env:
+            - name: TTS_HOME
+              value: "/data/voices"
+            - name: HF_HOME
+              value: "/data/models"
+            # Pre-loads highly efficient Whisper and Kokoro models into VRAM
+            - name: PRELOAD_STT_MODEL
+              value: "Systran/faster-whisper-small"
+            - name: PRELOAD_TTS_MODEL
+              value: "speaches-ai/Kokoro-82M-v1.0-ONNX"
+          ports:
+            - containerPort: 8000
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: speaches-audio-service
+  namespace: ai-enclave
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+  selector:
+    app: speaches-engine
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: comfyui-engine
+  namespace: ai-enclave
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: comfyui
+  template:
+    metadata:
+      labels:
+        app: comfyui
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: desktop-4090 # Schedules ComfyUI on your 4090 GPU Node
+      containers:
+        - name: comfyui
+          image: ghcr.io/ai-dock/comfyui:latest-cuda
+          ports:
+            - containerPort: 8188
+          env:
+            - name: COMFYUI_ARGS
+              value: "--listen 0.0.0.0"
+          resources:
+            limits:
+              nvidia.com/gpu: "1" # Requests 1 GPU
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: comfyui-data
+              mountPath: /workspace/ComfyUI/models
+              subPath: models
+            - name: comfyui-data
+              mountPath: /workspace/ComfyUI/custom_nodes
+              subPath: custom_nodes
+            - name: comfyui-data
+              mountPath: /workspace/ComfyUI/output
+              subPath: output
+      volumes:
+        - name: comfyui-data
+          hostPath:
+            path: /home/admin/ai-hub/workspace/comfyui
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: comfyui-service
+  namespace: ai-enclave
+spec:
+  ports:
+    - port: 8188
+      targetPort: 8188
+  selector:
+    app: comfyui
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-service
+  namespace: ai-enclave
+spec:
+  ports:
+    - port: 8000
+      targetPort: 11434 # Maps standard port to the vllm run target
+  selector:
+    app: vllm-engine
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama-beelink
+  namespace: ai-enclave
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama-beelink
+  template:
+    metadata:
+      labels:
+        app: ollama-beelink
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true" # Schedules 70B model strictly on the powerful Beelink GTR9 Pro CPU/RAM
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          resources:
+            requests:
+              cpu: "6"
+              memory: "32Gi" # Allocates substantial RAM for CPU-based 70B GGUF inference
+          volumeMounts:
+            - name: ollama-storage
+              mountPath: /root/.ollama
+      volumes:
+        - name: ollama-storage
+          hostPath:
+            path: /home/admin/ai-hub/workspace/ollama
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-service
+  namespace: ai-enclave
+spec:
+  ports:
+    - port: 11434
+      targetPort: 11434
+  selector:
+    app: ollama-beelink
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-config
+  namespace: ai-enclave
+data:
+  config.yaml: |
+    model_list:
+      - model_name: sovereign-enclave-model
+        litellm_params:
+          model: openai/deepseek-r1:70b
+          api_base: http://ollama-service.ai-enclave.svc.cluster.local:11434/v1
+          api_key: local-enclave-key
+        model_info:
+          id: beelink-70b-heavy
+      - model_name: sovereign-enclave-model
+        litellm_params:
+          model: openai/deepseek-r1:14b
+          api_base: http://ollama-service.ai-enclave.svc.cluster.local:11434/v1
+          api_key: local-enclave-key
+        model_info:
+          id: beelink-14b-fast-fallback
+      - model_name: sovereign-enclave-model
+        litellm_params:
+          model: openai/neuralmagic/DeepSeek-R1-Distill-Qwen-14B-AWQ
+          api_base: http://vllm-service.ai-enclave.svc.cluster.local:8000/v1
+          api_key: local-enclave-key
+          timeout: 2.0
+        model_info:
+          id: workstation-14b-fast
+    router_settings:
+      routing_strategy: "custom"
+      custom_routing_strategy_path: "/app/custom_router.py"
+    general_settings:
+      master_key: "local-enclave-key"
+  custom_router.py: |
+    import re
+    import socket
+    from litellm.router import CustomRoutingStrategyBase
+    from typing import Optional, List, Dict, Union
+
+    class ComplexityRouter(CustomRoutingStrategyBase):
+        def __init__(self):
+            super().__init__()
+
+        def is_4090_online(self) -> bool:
+            """Performs an ultra-fast, 200ms socket-level heartbeat to verify 4090 vLLM status."""
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.20) # 200 milliseconds timeout
+                s.connect(("vllm-service.ai-enclave.svc.cluster.local", 8000))
+                s.close()
+                return True
+            except Exception:
+                return False
+
+        async def async_get_available_deployment(
+            self,
+            model: str,
+            messages: Optional[List[Dict[str, str]]] = None,
+            input: Optional[Union[str, List]] = None,
+            specific_deployment: Optional[bool] = False,
+            request_kwargs: Optional[Dict] = None,
+        ):
+            # Extract prompt to determine query complexity
+            prompt = ""
+            if messages and len(messages) > 0:
+                prompt = messages[-1].get("content", "").lower()
+
+            # Dynamic complexity heuristic indicators
+            heavy_keywords = [
+                "code", "program", "function", "regex", "debug", "compile", "script",
+                "mathematics", "formula", "calculus", "equation", "proof", "architecture",
+                "design", "deep dive", "explain in-depth", "write code", "solve math"
+            ]
+            
+            # Analyze prompt properties
+            has_heavy_keywords = any(re.search(r'\b' + re.escape(kw) + r'\b', prompt) for kw in heavy_keywords)
+            is_length_exceeded = len(prompt) >= 500
+            has_code_syntax = "```" in prompt or "{" in prompt and "}" in prompt
+            
+            is_heavy = has_heavy_keywords or is_length_exceeded or has_code_syntax
+
+            # Locate node deployments by ID
+            heavy_beelink_dep = None
+            fast_beelink_dep = None
+            fast_workstation_dep = None
+            
+            for dep in self.model_list:
+                dep_id = dep.get("model_info", {}).get("id", "")
+                if dep_id == "beelink-70b-heavy":
+                    heavy_beelink_dep = dep
+                elif dep_id == "beelink-14b-fast-fallback":
+                    fast_beelink_dep = dep
+                elif dep_id == "workstation-14b-fast":
+                    fast_workstation_dep = dep
+
+            # Execute active workstation heartbeat check
+            workstation_online = self.is_4090_online()
+
+            # Dynamic Routing Dispatch Loop
+            if is_heavy:
+                # Heavy analytical queries always route to Beelink 70B GGUF
+                if heavy_beelink_dep:
+                    print(f"🤖 [Inference Gateway]: Complex request. Routing to Beelink 70B GGUF.")
+                    return heavy_beelink_dep
+            else:
+                # Simple/fast queries route to the workstation GPU if online, otherwise fallback to Beelink 14B GGUF
+                if workstation_online and fast_workstation_dep:
+                    print(f"🤖 [Inference Gateway]: Fast request. 4090 Workstation is ONLINE. Routing to 4090 GPU AWQ.")
+                    return fast_workstation_dep
+                elif fast_beelink_dep:
+                    print(f"🤖 [Inference Gateway]: Fast request. 4090 Workstation is OFFLINE. Routing to Beelink 14B GGUF CPU.")
+                    return fast_beelink_dep
+
+            # Absolute fallback to first listed deployment (standard resilience)
+            return self.model_list[0]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm-proxy
+  namespace: ai-enclave
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: litellm-proxy
+  template:
+    metadata:
+      labels:
+        app: litellm-proxy
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true" # Schedules the gateway on the Beelink Pro
+      containers:
+        - name: litellm
+          image: ghcr.io/berriai/litellm:latest
+          ports:
+            - containerPort: 4000
+          args: ["--config", "/app/config.yaml", "--port", "4000"]
+          env:
+            - name: LITELLM_MASTER_KEY
+              value: "local-enclave-key"
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+            - name: config-volume
+              mountPath: /app/custom_router.py
+              subPath: custom_router.py
+      volumes:
+        - name: config-volume
+          configMap:
+            name: litellm-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lite-llm-service
+  namespace: ai-enclave
+spec:
+  selector:
+    app: litellm-proxy
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 4000

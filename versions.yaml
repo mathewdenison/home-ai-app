@@ -1,0 +1,21 @@
+# versions.yaml
+# Single source of truth for all dependent packages, images, and charts in the Sovereign Enclave.
+# Run 'python scripts/sync-versions.py' to synchronize these versions across all configuration files.
+
+images:
+  open_webui: "ghcr.io/open-webui/open-webui:main"
+  searxng: "searxng/searxng:latest"
+  vllm: "vllm/vllm-openai:latest"
+  python_sandbox: "python:3.11-slim"
+  openedai_speech: "ghcr.io/matatonic/openedai-speech:latest"
+  comfyui: "ghcr.io/ai-dock/comfyui:latest-cuda"
+  ollama: "ollama/ollama:latest"
+  litellm: "ghcr.io/berriai/litellm:latest"
+
+charts:
+  openbao: "0.28.4"
+  dcgm_exporter: "3.4.0"
+  kube_prometheus_stack: "61.0.0"
+
+models:
+  vllm_default: "neuralmagic/DeepSeek-R1-Distill-Qwen-14B-AWQ"

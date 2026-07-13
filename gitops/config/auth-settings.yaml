@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-settings
+  namespace: ai-enclave
+data:
+  # Base URL of the Authentik instance in the Headscale mesh network
+  authentik_base_url: "https://auth.internal-mesh.local"
+  # Client ID for the Open WebUI application registered within Authentik
+  authentik_client_id: "open-webui-client-id-placeholder"
+  # Allowed scopes for OIDC identity verification
+  oidc_scopes: "openid email profile"
+  # Session security parameters mapping to advanced token durations
+  session_cookie_duration: "2592000" # 30 days
+  jwt_expiration_duration: "43200"   # 12 hours

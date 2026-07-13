@@ -1,0 +1,51 @@
+#!/bin/bash
+set -e
+
+VPS_PERIMETER="vpn.yourdomain.com"
+AUTHENTIK_BASE="https://auth.yourdomain.com"
+CLIENT_ID="YOUR_AUTHENTIK_CLIENT_ID_HERE"
+
+echo "🚨 [1/4] Triggering Cryptographic SPA Perimeter Knock..."
+fwknop -n "$VPS_PERIMETER"
+sleep 1
+
+echo "🌐 [2/4] Initializing OAuth Device Code Handshake with Authentik..."
+INIT_RESPONSE=$(curl -s -X POST "$AUTHENTIK_BASE/application/o/device/code/" \
+  -d "client_id=$CLIENT_ID" \
+  -d "scope=openid email profile")
+
+DEVICE_CODE=$(echo "$INIT_RESPONSE" | grep -o '"device_code":"[^"]*' | grep -o '[^"]*$')
+USER_CODE=$(echo "$INIT_RESPONSE" | grep -o '"user_code":"[^"]*' | grep -o '[^av"]*$')
+VERIFY_URL=$(echo "$INIT_RESPONSE" | grep -o '"verification_uri":"[^"]*' | grep -o '[^"]*$')
+POLL_INTERVAL=$(echo "$INIT_RESPONSE" | grep -o '"interval":[0-9]*' | grep -o '[^0-9]*$')
+
+echo "--------------------------------------------------------"
+echo "  👉 STEP 1: Open your web browser and navigate to:"
+echo "     $VERIFY_URL"
+echo ""
+echo "  🔑 STEP 2: Input this secure verification code:"
+echo "     $USER_CODE"
+echo "--------------------------------------------------------"
+
+if command -v xdg-open > /dev/null; then xdg-open "$VERIFY_URL"; elif command -v open > /dev/null; then open "$VERIFY_URL"; fi
+
+echo "⏳ [3/4] Awaiting browser-based Google OAuth validation confirmation..."
+while true; do
+    POLL_RESPONSE=$(curl -s -X POST "$AUTHENTIK_BASE/application/o/token/" \
+      -d "grant_type=urn:ietf:params:oauth:grant-type:device_code" \
+      -d "device_code=$DEVICE_CODE" \
+      -d "client_id=$CLIENT_ID")
+
+    if echo "$POLL_RESPONSE" | grep -q "access_token"; then
+        ACCESS_TOKEN=$(echo "$POLL_RESPONSE" | grep -o '"access_token":"[^"]*' | grep -o '[^"]*$')
+        break
+    elif echo "$POLL_RESPONSE" | grep -q "authorization_pending"; then
+        sleep "${POLL_INTERVAL:-5}"
+    else
+        echo "❌ Token acquisition failed." && exit 1
+    fi
+done
+
+echo "✅ [4/4] Google Authentication Validated. Token acquired."
+mkdir -p ~/.config/enclave && echo "$ACCESS_TOKEN" > ~/.config/enclave/session_token && chmod 600 ~/.config/enclave/session_token
+echo "🚀 Enclave developer session active. Token is valid for 12 hours."

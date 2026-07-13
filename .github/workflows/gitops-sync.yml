@@ -1,0 +1,53 @@
+name: Enclave GitOps Manifest Validation & Staging Sync
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate-and-test:
+    name: Validate Manifests & Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup YAML Lint
+        run: |
+          sudo apt-get update && sudo apt-get install -y yamllint
+
+      - name: Lint Kubernetes & Zarf Manifests
+        run: |
+          yamllint -d "{extends: relaxed, rules: {line-length: disable}}" gitops/
+          yamllint -d "{extends: relaxed, rules: {line-length: disable}}" bootstrap/zarf.yaml
+
+      - name: Verify Version Alignment (Anti-Drift Check)
+        run: |
+          echo "Checking for drift between versions.yaml and manifests..."
+          python scripts/sync-versions.py
+          if ! git diff --exit-code; then
+            echo "❌ Error: Configuration drift detected!"
+            echo "Versions defined in 'versions.yaml' do not match 'bootstrap/zarf.yaml' or 'gitops/base/enclave-apps.yaml'."
+            echo "Please run 'python scripts/sync-versions.py' locally and commit the synchronized changes."
+            exit 1
+          fi
+          echo "✅ No version drift detected. All manifests are perfectly aligned."
+
+      - name: ShellCheck Scripts
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: 'scripts'
+
+  trigger-outbound-sync:
+    name: Trigger Outbound GitOps Sync
+    needs: validate-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Log Sync Trigger
+        run: |
+          echo "✅ Manifests & scripts validated successfully."
+          echo "🚀 Simulating Outbound Sync dispatch via secure Headscale loop."
+          echo "The self-hosted 'enclave-runner' polling inside the cluster will ingest this revision."

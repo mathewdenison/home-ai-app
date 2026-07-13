@@ -1,0 +1,24 @@
+kind: ZarfPackageConfig
+metadata:
+  name: sovereign-ai-enclave-4090
+  description: "Hardened 4090 Workstation GPU Acceleration and Speech/Image Pipeline Dependencies"
+  version: "1.0.0"
+
+components:
+  - name: internal-core-images
+    required: true
+    description: "Bundled high-throughput GPU inference, voice synthesis, and image generation container images"
+    images:
+      - vllm/vllm-openai:latest
+      - ghcr.io/matatonic/openedai-speech:latest
+      - ghcr.io/ai-dock/comfyui:latest-cuda
+      - python:3.11-slim
+
+  - name: infrastructure-helm-charts
+    required: true
+    description: "Packaged NVIDIA DCGM GPU telemetry exporter helm charts"
+    charts:
+      - name: dcgm-exporter
+        url: https://nvidia.github.io/dcgm-exporter/helm-charts
+        version: "3.4.0"
+        namespace: ai-enclave
