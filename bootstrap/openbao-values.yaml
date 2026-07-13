@@ -1,0 +1,3 @@
+server:
+  image:
+    tag: "2.5.5"
