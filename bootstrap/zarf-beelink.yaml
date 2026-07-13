@@ -30,7 +30,7 @@ components:
         version: "61.0.0"
         namespace: ai-enclave
     images:
-      - docker.io/hashicorp/vault-k8s:1.4.1
+      - docker.io/hashicorp/vault-k8s:1.7.2
       - quay.io/openbao/openbao:2.5.5
       - quay.io/prometheus-operator/prometheus-operator:v0.75.0
       - quay.io/prometheus-operator/prometheus-config-reloader:v0.75.0
