@@ -16,8 +16,6 @@ if ! oscap xccdf eval --profile xccdf_org.ssgproject.content_profile_stig /usr/s
 fi
 
 # Detect previous failed or existing installations and offer to purge them
-# This is critical because a previous failed run writes the default systemd unit files 
-# pointing to /var/lib/rancher/k3s which must be deleted to apply the /opt/k3s-data redirect!
 if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-uninstall.sh" ] || [ -f "/etc/systemd/system/k3s.service" ] || [ -f "/etc/systemd/system/k3s-agent.service" ] || mountpoint -q /var/lib/rancher/k3s; then
     echo ""
     echo "⚠️ Warning: An existing or previous failed K3s/Zarf installation was detected!"
@@ -43,7 +41,7 @@ if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-un
             /usr/local/bin/k3s-agent-uninstall.sh || true
         fi
 
-        # Safely unmount any active bind mounts
+        # Safely unmount any active bind mounts if they were previously created
         if mountpoint -q /var/lib/rancher/k3s; then
             echo "Unmounting /var/lib/rancher/k3s..."
             umount /var/lib/rancher/k3s || umount -l /var/lib/rancher/k3s || true
@@ -60,6 +58,12 @@ if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-un
         rm -rf /var/lib/kubelet
         rm -f /etc/systemd/system/k3s.service
         rm -f /etc/systemd/system/k3s-agent.service
+        
+        # Clean SELinux file contexts for /opt/k3s-data if semanage was used
+        if command -v semanage >/dev/null 2>&1; then
+            echo "Removing custom SELinux file contexts..."
+            semanage fcontext -d -e /var/lib/rancher/k3s "/opt/k3s-data" 2>/dev/null || true
+        fi
         
         # Reload systemd to apply service deletion
         systemctl daemon-reload
@@ -127,28 +131,32 @@ fi
 
 JOIN_INFO_FILE="$USB_ROOT/cluster-join-info.env"
 
-# PRE-INSTALLATION BIND MOUNT COMPLIANCE
-# To bypass BOTH /var noexec and SELinux's strict context path enforcement (which only targets /var/lib/rancher/k3s),
-# we utilize a BIND MOUNT. K3s operates out of its default SELinux-approved path, but the kernel physically writes 
-# and executes the binaries from /opt/k3s-data (which allows execution!).
-echo "🔗 Configuring STIG-compliant bind mount for cluster data directories..."
+# PRE-INSTALLATION SELINUX AND MOUNT CONFIGURATION
+# To bypass /var noexec, we must use a custom data directory (/opt/k3s-data).
+# To bypass the SELinux block on custom paths, we apply Path Equivalence, instructing SELinux 
+# to treat /opt/k3s-data as mathematically equivalent to the default /var/lib/rancher/k3s path.
+echo "🔗 Configuring custom K3s directory with STIG & SELinux path equivalence..."
 mkdir -p /opt/k3s-data
-mkdir -p /var/lib/rancher/k3s
+mkdir -p /etc/rancher/k3s
+echo "data-dir: /opt/k3s-data" > /etc/rancher/k3s/config.yaml
 
-if ! mountpoint -q /var/lib/rancher/k3s; then
-    mount --bind /opt/k3s-data /var/lib/rancher/k3s
-fi
-
-# Persist the bind mount across node reboots in fstab
-if ! grep -q "/var/lib/rancher/k3s" /etc/fstab; then
-    echo "/opt/k3s-data /var/lib/rancher/k3s none bind 0 0" >> /etc/fstab
+# Apply the SELinux path equivalence rule (semanage is pre-installed on Rocky STIG profiles)
+if command -v semanage >/dev/null 2>&1; then
+    echo "Equating /opt/k3s-data to /var/lib/rancher/k3s in SELinux policy..."
+    semanage fcontext -a -e /var/lib/rancher/k3s "/opt/k3s-data" || true
+    echo "Restoring SELinux security contexts on /opt/k3s-data recursively..."
+    restorecon -R -v /opt/k3s-data || true
+else
+    # Fallback to general container context if semanage is not available
+    echo "Applying standard container security context to /opt/k3s-data..."
+    chcon -R -t container_var_lib_t /opt/k3s-data 2>/dev/null || true
 fi
 
 if [ "$NODE_CHOICE" = "1" ]; then
     echo "Configuring as Beelink Gateway (Control Plane Server)..."
 
-    # Bootstrap control plane with registry, agent, and K3s natively out of default path
-    zarf init --components k3s --confirm
+    # Bootstrap control plane with registry, agent, and K3s pointing to /opt/k3s-data
+    K3S_DATA_DIR=/opt/k3s-data zarf init --components k3s --confirm
 
     echo "🚀 [3/3] Deploying Beelink Gateway AI Container Layer..."
     # Find and deploy Beelink-specific package
@@ -165,8 +173,8 @@ if [ "$NODE_CHOICE" = "1" ]; then
     kubectl apply -f ../gitops/base/network-policy.yaml
     kubectl apply -f ../gitops/base/observability-dashboards.yaml
 
-    # Retrieve Join Token and IP natively
-    JOIN_TOKEN=$(cat /var/lib/rancher/k3s/server/node-token 2>/dev/null || echo "PENDING")
+    # Retrieve Join Token and IP from custom /opt/k3s-data directory
+    JOIN_TOKEN=$(cat /opt/k3s-data/server/node-token 2>/dev/null || echo "PENDING")
     
     # Intelligently find local network IP (preferring 10.x, 192.x, or 172.x subnets)
     LOCAL_IP=""
@@ -239,8 +247,8 @@ elif [ "$NODE_CHOICE" = "2" ]; then
         echo "✅ Network connectivity verified!"
     fi
 
-    # Bootstrap worker node in agent mode pointing to the Beelink Gateway natively
-    zarf init --components k3s --set K3S_ARGS="agent --server https://${SERVER_IP}:6443 --token ${NODE_TOKEN}" --confirm
+    # Bootstrap worker node in agent mode pointing to the Beelink Gateway (pointing to /opt/k3s-data)
+    K3S_DATA_DIR=/opt/k3s-data zarf init --components k3s --set K3S_ARGS="agent --server https://${SERVER_IP}:6443 --token ${NODE_TOKEN}" --confirm
 
     echo "🚀 [3/3] Deploying RTX 4090 Workstation GPU AI Container Layer..."
     # Find and deploy 4090-specific package
