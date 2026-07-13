@@ -64,6 +64,18 @@ if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-un
             echo "Removing custom SELinux file contexts..."
             semanage fcontext -d -e /var/lib/rancher/k3s "/opt/k3s-data" 2>/dev/null || true
         fi
+
+        # Clean fapolicyd rules for K3s
+        if [ -f "/etc/fapolicyd/rules.d/80-k3s.rules" ]; then
+            echo "Removing fapolicyd K3s rules..."
+            rm -f /etc/fapolicyd/rules.d/80-k3s.rules
+            if command -v fagenrules >/dev/null 2>&1; then
+                fagenrules --load || true
+            fi
+            if systemctl is-active fapolicyd &>/dev/null; then
+                systemctl restart fapolicyd || true
+            fi
+        fi
         
         # Reload systemd to apply service deletion
         systemctl daemon-reload
@@ -130,6 +142,28 @@ if [ ! -d "$USB_ROOT" ]; then
 fi
 
 JOIN_INFO_FILE="$USB_ROOT/cluster-join-info.env"
+
+# PRE-INSTALLATION FAPOLICYD COMPLIANCE (STIG Hardening Exception)
+# fapolicyd blocks any binary execution from non-system paths (like our custom /opt/k3s-data directory,
+# dynamic network plugin paths in /opt/cni, kubelet volumes, and K3s runtime states in /run).
+FAPOLICY_RULES="/etc/fapolicyd/rules.d/80-k3s.rules"
+if [ -d "/etc/fapolicyd/rules.d" ] && [ ! -f "$FAPOLICY_RULES" ]; then
+    echo "🔒 Configuring fapolicyd STIG exceptions for K3s execution paths..."
+    cat <<EOF > "$FAPOLICY_RULES"
+allow perm=any all : dir=/opt/k3s-data/
+allow perm=any all : dir=/opt/cni/
+allow perm=any all : dir=/run/k3s/
+allow perm=any all : dir=/var/lib/kubelet/
+EOF
+    # Load rules and restart fapolicyd daemon if active
+    if command -v fagenrules >/dev/null 2>&1; then
+        fagenrules --load || true
+    fi
+    if systemctl is-active fapolicyd &>/dev/null; then
+        echo "Restarting fapolicyd to apply new execution rules..."
+        systemctl restart fapolicyd || true
+    fi
+fi
 
 # PRE-INSTALLATION SELINUX AND MOUNT CONFIGURATION
 # To bypass /var noexec, we must use a custom data directory (/opt/k3s-data).
