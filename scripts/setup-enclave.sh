@@ -16,7 +16,7 @@ if ! oscap xccdf eval --profile xccdf_org.ssgproject.content_profile_stig /usr/s
 fi
 
 # Detect previous failed or existing installations and offer to purge them
-if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-uninstall.sh" ] || [ -f "/etc/systemd/system/k3s.service" ] || [ -f "/etc/systemd/system/k3s-agent.service" ] || mountpoint -q /var/lib/rancher/k3s; then
+if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-uninstall.sh" ] || [ -f "/etc/systemd/system/k3s.service" ] || [ -f "/etc/systemd/system/k3s-agent.service" ] || mountpoint -q /var/lib/rancher/k3s || mount | grep -qE " /var/lib/kubelet| /var/lib/rancher| /opt/k3s-data| /var/lib/containerd"; then
     echo ""
     echo "⚠️ Warning: An existing or previous failed K3s/Zarf installation was detected!"
     echo "To apply the new STIG-compliant /opt/k3s-data path, we must completely purge previous attempts."
@@ -41,11 +41,15 @@ if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-un
             /usr/local/bin/k3s-agent-uninstall.sh || true
         fi
 
-        # Safely unmount any active bind mounts if they were previously created
-        if mountpoint -q /var/lib/rancher/k3s; then
-            echo "Unmounting /var/lib/rancher/k3s..."
-            umount /var/lib/rancher/k3s || umount -l /var/lib/rancher/k3s || true
-        fi
+        # Safely unmount all active Kubernetes pod volumes and container filesystems.
+        # This is critical to prevent "Device or resource busy" blocks during directory cleanup.
+        # Sorting in reverse ensures sub-mounts are detached before their parent directories,
+        # and using 'umount -l' (lazy unmount) immediately detaches the filesystem from the directory tree.
+        echo "Safely unmounting busy container filesystems and pod volumes..."
+        for mount_point in $(mount | grep -E " /var/lib/kubelet| /var/lib/rancher| /opt/k3s-data| /var/lib/containerd" | awk '{print $3}' | sort -r); do
+            echo "Unmounting busy resource: $mount_point"
+            umount -l "$mount_point" || true
+        done
 
         # Clean fstab entries
         sed -i '\/var\/lib\/rancher\/k3s/d' /etc/fstab 2>/dev/null || true
@@ -56,8 +60,10 @@ if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-un
         rm -rf /etc/rancher/k3s
         rm -rf /opt/k3s-data
         rm -rf /var/lib/kubelet
-        rm -f /etc/systemd/system/k3s.service
-        rm -f /etc/systemd/system/k3s-agent.service
+        rm -rf /var/lib/containerd
+        
+        # Reload systemd to apply service deletion
+        systemctl daemon-reload
         
         # Clean SELinux file contexts for /opt/k3s-data if semanage was used
         if command -v semanage >/dev/null 2>&1; then
@@ -76,9 +82,6 @@ if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-un
                 systemctl restart fapolicyd || true
             fi
         fi
-        
-        # Reload systemd to apply service deletion
-        systemctl daemon-reload
         
         echo "✅ Previous state successfully purged! Ready for a fresh, clean install."
         echo ""
