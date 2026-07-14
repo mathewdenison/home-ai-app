@@ -203,9 +203,20 @@ if [ "$NODE_CHOICE" = "1" ]; then
     beelink_pkg=$(ls zarf-package-sovereign-ai-enclave-beelink-*.tar.zst 2>/dev/null | head -n 1)
     if [ -n "$beelink_pkg" ]; then zarf package deploy "$beelink_pkg" --confirm; fi
 
-    echo "🧠 Deploying DeepSeek-R1 70B Model Weights..."
-    model_70b=$(ls zarf-package-sovereign-ai-model-70b-*.tar.zst 2>/dev/null | head -n 1)
-    if [ -n "$model_70b" ]; then zarf package deploy "$model_70b" --confirm; fi
+    echo "🧠 Deploying DeepSeek-R1 Model Weights to Beelink..."
+    # Deploy 70B Heavy Model
+    model_70b=$(ls zarf-package-sovereign-ai-model-70b-gguf-*.tar.zst 2>/dev/null | head -n 1)
+    if [ -n "$model_70b" ]; then
+        echo "Installing 70B Heavy Model..."
+        zarf package deploy "$model_70b" --confirm
+    fi
+    
+    # Deploy 14B Fallback Model
+    model_14b_gguf=$(ls zarf-package-sovereign-ai-model-14b-gguf-*.tar.zst 2>/dev/null | head -n 1)
+    if [ -n "$model_14b_gguf" ]; then
+        echo "Installing 14B Fallback Model..."
+        zarf package deploy "$model_14b_gguf" --confirm
+    fi
 
     kubectl apply -f ../gitops/base/network-policy.yaml
     kubectl apply -f ../gitops/base/observability-dashboards.yaml
@@ -232,9 +243,9 @@ elif [ "$NODE_CHOICE" = "2" ]; then
     workstation_pkg=$(ls zarf-package-sovereign-ai-enclave-4090-*.tar.zst 2>/dev/null | head -n 1)
     if [ -n "$workstation_pkg" ]; then zarf package deploy "$workstation_pkg" --confirm; fi
 
-    echo "🧠 Deploying DeepSeek-R1 14B Model Weights..."
-    model_14b=$(ls zarf-package-sovereign-ai-model-14b-*.tar.zst 2>/dev/null | head -n 1)
-    if [ -n "$model_14b" ]; then zarf package deploy "$model_14b" --confirm; fi
+    echo "🧠 Deploying DeepSeek-R1 14B AWQ Model Weights to Workstation..."
+    model_14b_awq=$(ls zarf-package-sovereign-ai-model-14b-awq-*.tar.zst 2>/dev/null | head -n 1)
+    if [ -n "$model_14b_awq" ]; then zarf package deploy "$model_14b_awq" --confirm; fi
 
     echo "✅ Day-Zero Enclave Cluster Initialization Complete on RTX 4090 Node!"
 else

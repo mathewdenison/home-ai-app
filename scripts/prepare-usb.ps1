@@ -14,7 +14,7 @@ Write-Host "[*] Starting Sovereign Enclave offline USB preparation script..." -F
 # Ask user for execution mode (Interactive Toggle)
 echo ""
 Write-Host "Select the USB Preparation Mode:" -ForegroundColor Cyan
-Write-Host "  [1] Full Payload (Sync versions, download Zarf binaries, compile ALL packages including models - Takes ~30 mins)" -ForegroundColor Gray
+Write-Host "  [1] Full Payload (Sync versions, Zarf binaries, Software + ALL Models - Takes ~45 mins)" -ForegroundColor Gray
 Write-Host "  [2] Software Only (Compile app packages only, skipping heavy models - Faster!)" -ForegroundColor Gray
 Write-Host "  [3] Scripts Only (Sync versions and stage scripts ONLY, preserving existing packages - Super Fast!)" -ForegroundColor Gray
 $Choice = Read-Host "Select an option [1-3, Default: 1]"
@@ -98,6 +98,8 @@ if ($ScriptsOnly -or $SoftwareOnly) {
     $VersionsContent = Get-Content "$ProjectRoot\versions.yaml" -Raw
     $70bName = [regex]::Match($VersionsContent, '70b_gguf_name:\s*"([^"]+)"').Groups[1].Value
     $70bUrl = [regex]::Match($VersionsContent, '70b_gguf_url:\s*"([^"]+)"').Groups[1].Value
+    $14bGGUFName = [regex]::Match($VersionsContent, '14b_gguf_name:\s*"([^"]+)"').Groups[1].Value
+    $14bGGUFUrl = [regex]::Match($VersionsContent, '14b_gguf_url:\s*"([^"]+)"').Groups[1].Value
     $14bRepo = [regex]::Match($VersionsContent, '14b_awq_repo:\s*"([^"]+)"').Groups[1].Value
     
     # 70B GGUF Download
@@ -105,38 +107,27 @@ if ($ScriptsOnly -or $SoftwareOnly) {
     if (-not (Test-Path $70bPath)) {
         Write-Host "Downloading 70B GGUF Model (~40GB)... This may take time." -ForegroundColor Gray
         Invoke-WebRequest -Uri $70bUrl -OutFile $70bPath -UseBasicParsing
-    } else {
-        Write-Host "Cached 70B GGUF model found." -ForegroundColor Green
-    }
-
-    # 14B GGUF Download (Fallback for Beelink)
-    $14bName = [regex]::Match($VersionsContent, '14b_gguf_name:\s*"([^"]+)"').Groups[1].Value
-    $14bUrl = [regex]::Match($VersionsContent, '14b_gguf_url:\s*"([^"]+)"').Groups[1].Value
-    $14bGGUFPath = "$ModelCache\$14bName"
-    if (-not (Test-Path $14bGGUFPath)) {
-        Write-Host "Downloading 14B GGUF Fallback Model (~9GB)..." -ForegroundColor Gray
-        Invoke-WebRequest -Uri $14bUrl -OutFile $14bGGUFPath -UseBasicParsing
-    } else {
-        Write-Host "Cached 14B GGUF fallback model found." -ForegroundColor Green
-    }
+    } else { Write-Host "Cached 70B GGUF model found." -ForegroundColor Green }
     
-    # 14B AWQ Download (Using huggingface-cli if present, or simple web requests for basic files)
+    # 14B GGUF Download
+    $14bGGUFPath = "$ModelCache\$14bGGUFName"
+    if (-not (Test-Path $14bGGUFPath)) {
+        Write-Host "Downloading 14B GGUF Model (~9GB)..." -ForegroundColor Gray
+        Invoke-WebRequest -Uri $14bGGUFUrl -OutFile $14bGGUFPath -UseBasicParsing
+    } else { Write-Host "Cached 14B GGUF model found." -ForegroundColor Green }
+    
+    # 14B AWQ Download
     $14bDir = "$ModelCache\deepseek-r1-distill-qwen-14b-awq"
     if (-not (Test-Path $14bDir)) {
         New-Item -Path $14bDir -ItemType Directory -Force | Out-Null
         Write-Host "Downloading 14B AWQ Model weights..." -ForegroundColor Gray
-        # Basic list of files needed for vLLM AWQ
         $files = @("config.json", "generation_config.json", "model.safetensors", "quantization_config.json", "tokenizer.json", "tokenizer_config.json", "vocab.json", "merges.txt", "special_tokens_map.json")
         foreach ($f in $files) {
             $fUrl = "https://huggingface.co/$14bRepo/resolve/main/$f"
             $fPath = "$14bDir\$f"
-            if (-not (Test-Path $fPath)) {
-                Invoke-WebRequest -Uri $fUrl -OutFile $fPath -UseBasicParsing
-            }
+            if (-not (Test-Path $fPath)) { Invoke-WebRequest -Uri $fUrl -OutFile $fPath -UseBasicParsing }
         }
-    } else {
-        Write-Host "Cached 14B AWQ model directory found." -ForegroundColor Green
-    }
+    } else { Write-Host "Cached 14B AWQ model directory found." -ForegroundColor Green }
 }
 
 # 7. Clean / Create Staging Folder
@@ -159,17 +150,21 @@ if (-not $ScriptsOnly) {
     
     # Model Packages (Only in Full Mode)
     if (-not $SoftwareOnly) {
-        Write-Host "`n[*] Step 6: Compiling heavy Model Zarf packages..." -ForegroundColor Yellow
+        Write-Host "`n[*] Step 6: Compiling individual Model Zarf packages..." -ForegroundColor Yellow
         
-        # Link cached files into bootstrap folder temporarily for Zarf create
+        # 1. 70B GGUF Package
         Copy-Item "$ModelCache\$70bName" "$ProjectRoot\bootstrap\"
-        Copy-Item "$ModelCache\$14bName" "$ProjectRoot\bootstrap\"
-        & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-models-beelink.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
+        & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-model-70b-gguf.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
         Remove-Item "$ProjectRoot\bootstrap\$70bName"
-        Remove-Item "$ProjectRoot\bootstrap\$14bName"
         
+        # 2. 14B GGUF Package
+        Copy-Item "$ModelCache\$14bGGUFName" "$ProjectRoot\bootstrap\"
+        & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-model-14b-gguf.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
+        Remove-Item "$ProjectRoot\bootstrap\$14bGGUFName"
+        
+        # 3. 14B AWQ Package
         Copy-Item "$14bDir" "$ProjectRoot\bootstrap\" -Recurse
-        & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-model-14b.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
+        & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-model-14b-awq.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
         Remove-Item "$ProjectRoot\bootstrap\deepseek-r1-distill-qwen-14b-awq" -Recurse
     }
 }

@@ -1,0 +1,24 @@
+kind: ZarfPackageConfig
+metadata:
+  name: sovereign-ai-model-70b-gguf
+  description: "Offline DeepSeek-R1-Distill-Llama-70B GGUF Model Weight"
+  version: "1.0.0"
+
+components:
+  - name: model-70b-gguf
+    required: true
+    description: "Deploys the 70B GGUF model file to the Ollama storage directory"
+    files:
+      - source: DeepSeek-R1-Distill-Llama-70B-Q4_K_M.gguf
+        target: /home/admin/ai-hub/workspace/ollama/models/DeepSeek-R1-Distill-Llama-70B-Q4_K_M.gguf
+        executable: false
+    actions:
+      onDeploy:
+        after:
+          - cmd: |
+              echo "Creating Ollama Modelfile for 70B..."
+              cat <<EOF > /home/admin/ai-hub/workspace/ollama/Modelfile-70b
+              FROM /root/.ollama/models/DeepSeek-R1-Distill-Llama-70B-Q4_K_M.gguf
+              EOF
+              echo "Registering 70B model in Ollama..."
+              kubectl exec -n ai-enclave deployment/ollama-beelink -- ollama create deepseek-r1:70b -f /root/.ollama/Modelfile-70b
