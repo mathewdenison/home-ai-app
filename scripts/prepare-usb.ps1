@@ -11,6 +11,23 @@ $ModelCache = "$CacheFolder\models"
 
 Write-Host "[*] Starting Sovereign Enclave offline USB preparation script..." -ForegroundColor Cyan
 
+# Helper Function: Safely remove files/folders with retries to handle Windows file locks
+function Safe-RemoveItem {
+    param([string]$Path, [switch]$Recurse)
+    if (Test-Path $Path) {
+        for ($i=0; $i -lt 5; $i++) {
+            try {
+                if ($Recurse) { Remove-Item $Path -Recurse -Force -ErrorAction Stop }
+                else { Remove-Item $Path -Force -ErrorAction Stop }
+                return
+            } catch {
+                Start-Sleep -Seconds 1
+            }
+        }
+        Write-Warning "Could not remove $Path after 5 attempts. It may still be locked."
+    }
+}
+
 # Ask user for execution mode (Interactive Toggle)
 echo ""
 Write-Host "Select the USB Preparation Mode:" -ForegroundColor Cyan
@@ -136,10 +153,10 @@ if ($ScriptsOnly -or $SoftwareOnly) {
 Write-Host "`n[*] Step 4: Preparing staging directory..." -ForegroundColor Yellow
 if (-not (Test-Path $StagingFolder)) { New-Item -Path $StagingFolder -ItemType Directory -Force | Out-Null }
 if ($ScriptsOnly) {
-    Remove-Item -Path (Join-Path $StagingFolder "scripts") -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path (Join-Path $StagingFolder "versions.yaml") -Force -ErrorAction SilentlyContinue
+    Safe-RemoveItem -Path (Join-Path $StagingFolder "scripts") -Recurse
+    Safe-RemoveItem -Path (Join-Path $StagingFolder "versions.yaml")
 } else {
-    Remove-Item -Path $StagingFolder -Recurse -Force
+    Safe-RemoveItem -Path $StagingFolder -Recurse
     New-Item -Path $StagingFolder -ItemType Directory -Force | Out-Null
 }
 
@@ -157,17 +174,17 @@ if (-not $ScriptsOnly) {
         # 1. 70B GGUF Package
         Copy-Item "$ModelCache\$70bName" "$ProjectRoot\bootstrap\"
         & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-model-70b-gguf.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
-        Remove-Item "$ProjectRoot\bootstrap\$70bName"
+        Safe-RemoveItem -Path "$ProjectRoot\bootstrap\$70bName"
         
         # 2. 14B GGUF Package
         Copy-Item "$ModelCache\$14bGGUFName" "$ProjectRoot\bootstrap\"
         & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-model-14b-gguf.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
-        Remove-Item "$ProjectRoot\bootstrap\$14bGGUFName"
+        Safe-RemoveItem -Path "$ProjectRoot\bootstrap\$14bGGUFName"
         
         # 3. 14B AWQ Package
         Copy-Item "$14bDir" "$ProjectRoot\bootstrap\" -Recurse
         & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-model-14b-awq.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
-        Remove-Item "$ProjectRoot\bootstrap\deepseek-r1-distill-qwen-14b-awq" -Recurse
+        Safe-RemoveItem -Path "$ProjectRoot\bootstrap\deepseek-r1-distill-qwen-14b-awq" -Recurse
     }
 }
 
