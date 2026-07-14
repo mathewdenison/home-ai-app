@@ -48,25 +48,25 @@ if ($Choice -eq "3") {
     Write-Host "`n[*] Running in FULL PAYLOAD mode..." -ForegroundColor Yellow
 }
 
-# 1b. USB Drive Auto-Discovery
+# 1b. USB Drive Auto-Discovery (Unified Selection Interface)
 $TargetUSBDrive = $null
 Write-Host "`n[*] Scanning for connected USB flash drives..." -ForegroundColor Yellow
 $RemovableVolumes = Get-Volume | Where-Object { $_.DriveType -eq 'Removable' -and $_.DriveLetter }
 
 if ($RemovableVolumes) {
-    if ($RemovableVolumes.Count -eq 1) {
-        $Drive = $RemovableVolumes[0]
-        $Response = Read-Host "Detected USB Drive $($Drive.DriveLetter): ($($Drive.FileSystemLabel)). Write directly to this drive? [y/N]"
-        if ($Response -eq 'y') { $TargetUSBDrive = "$($Drive.DriveLetter):\" }
+    Write-Host "Available Removable Drives:" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $RemovableVolumes.Count; $i++) {
+        $Vol = $RemovableVolumes[$i]
+        Write-Host "  [$($i + 1)] $($Vol.DriveLetter): ($($Vol.FileSystemLabel))" -ForegroundColor Gray
+    }
+    Write-Host "  [0] None / Local-Only Staging" -ForegroundColor Gray
+    
+    $Selection = Read-Host "`nSelect drive number to write directly to [0-$($RemovableVolumes.Count), Default: 0]"
+    if ($Selection -match '^[1-9]\d*$' -and [int]$Selection -le $RemovableVolumes.Count) {
+        $TargetUSBDrive = "$($RemovableVolumes[[int]$Selection - 1].DriveLetter):\"
+        Write-Host "[+] Target USB Drive set to: $TargetUSBDrive" -ForegroundColor Green
     } else {
-        Write-Host "Multiple removable drives detected:"
-        for ($i = 0; $i -lt $RemovableVolumes.Count; $i++) {
-            Write-Host "  [$i] $($RemovableVolumes[$i].DriveLetter): ($($RemovableVolumes[$i].FileSystemLabel))"
-        }
-        $Selection = Read-Host "Select drive index to write directly to (or press Enter to skip)"
-        if ($Selection -match '^\d+$' -and [int]$Selection -lt $RemovableVolumes.Count) {
-            $TargetUSBDrive = "$($RemovableVolumes[[int]$Selection].DriveLetter):\"
-        }
+        Write-Host "[*] No USB selected. Proceeding with local staging only." -ForegroundColor Gray
     }
 } else {
     Write-Host "No USB drives detected. Staging will remain local-only." -ForegroundColor Gray
