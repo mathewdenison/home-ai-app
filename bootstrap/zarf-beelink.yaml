@@ -14,6 +14,7 @@ components:
       - docker.io/ollama/ollama:latest
       - ghcr.io/berriai/litellm:latest
       - docker.io/library/python:3.11-slim
+      - docker.io/bitnami/kubectl:latest # Image for the managed OpenBao init job
 
   - name: infrastructure-helm-charts
     required: true
@@ -51,70 +52,11 @@ components:
       - docker.io/library/busybox:latest
       - docker.io/library/alpine:latest
 
-  - name: openbao-auto-init
+  - name: managed-openbao-initialization
     required: true
-    description: "Securely automates OpenBao initialization and unsealing without log exposure"
-    actions:
-      onDeploy:
-        after:
-          # Step 1: Resiliently wait for the OpenBao pod to exist and be in the 'Running' phase.
-          # Note: OpenBao pods are NOT 'Ready' until they are unsealed, so we cannot wait for the Ready condition.
-          - cmd: |
-              echo "⏳ Waiting for OpenBao pod to reach Running phase..."
-              until [ "$(kubectl get pod openbao-0 -n ai-enclave -o jsonpath='{.status.phase}' 2>/dev/null)" == "Running" ]; do
-                sleep 2
-              done
-              echo "🚀 OpenBao pod is running. Commencing security initialization..."
-          
-          # Step 2: Securely initialize, save keys to USB, and perform initial unseal
-          - cmd: |
-              # Check if OpenBao is already initialized to prevent overwriting
-              if kubectl exec -n ai-enclave openbao-0 -- bao status 2>&1 | grep -q "Initialized.*false"; then
-                echo "🔒 OpenBao uninitialized. Initializing security barrier securely..."
-                
-                # 1. Capture the raw JSON payload in a local variable (never echoed)
-                # We use 1 share / 1 threshold for ease of use in this local enclave.
-                INIT_PAYLOAD=$(kubectl exec -n ai-enclave openbao-0 -- bao operator init -key-shares=1 -key-threshold=1 -format=json)
-                
-                # 2. Extract keys using standard grep/sed to avoid installing jq
-                ROOT_TOKEN=$(echo "$INIT_PAYLOAD" | grep -o '"root_token":"[^"]*' | grep -o '[^"]*$')
-                UNSEAL_KEY=$(echo "$INIT_PAYLOAD" | grep -o '"unseal_keys_b64":\["[^"]*"' | grep -o '[^"]*"' | tail -n 1 | tr -d '"')
-                
-                # 3. Save the master payload directly to your USB mount for disaster recovery
-                if [ -d "/mnt/usb" ]; then
-                  echo "$INIT_PAYLOAD" > /mnt/usb/openbao-master-keys.json
-                  chmod 600 /mnt/usb/openbao-master-keys.json
-                  echo "💾 Master keys written safely to physical USB media (D:)."
-                else
-                  echo "$INIT_PAYLOAD" > ./openbao-master-keys.json
-                  chmod 600 ./openbao-master-keys.json
-                  echo "⚠️ USB mount not found at /mnt/usb. Master keys saved locally to deployment directory."
-                fi
-                
-                # 4. Perform the first-time unseal so the pod becomes 'Ready'
-                echo "🔓 Unsealing OpenBao for the first time..."
-                kubectl exec -n ai-enclave openbao-0 -- bao operator unseal "$UNSEAL_KEY"
-                
-                # 5. Inject the root token into a heavily restricted Kubernetes Secret 
-                echo -n "$ROOT_TOKEN" | kubectl create secret generic openbao-root-token \
-                  --namespace ai-enclave \
-                  --from-file=token=/dev/stdin
-                  
-                # Clear variables from active shell memory
-                unset INIT_PAYLOAD
-                unset ROOT_TOKEN
-                unset UNSEAL_KEY
-                echo "✅ Initialization and unsealing complete. Security tokens isolated."
-              else
-                echo "🔒 OpenBao is already initialized."
-                
-                # Auto-unseal if it's currently sealed and we have the key on the USB
-                if kubectl exec -n ai-enclave openbao-0 -- bao status 2>&1 | grep -q "Sealed.*true"; then
-                   if [ -f "/mnt/usb/openbao-master-keys.json" ]; then
-                      echo "🔓 Detected sealed vault. Re-unsealing using keys on USB..."
-                      UNSEAL_KEY=$(grep -o '"unseal_keys_b64":\["[^"]*"' /mnt/usb/openbao-master-keys.json | grep -o '[^"]*"' | tail -n 1 | tr -d '"')
-                      kubectl exec -n ai-enclave openbao-0 -- bao operator unseal "$UNSEAL_KEY"
-                      unset UNSEAL_KEY
-                   fi
-                fi
-              fi
+    description: "Deploys a Kubernetes Job to manage OpenBao security barrier initialization and unsealing"
+    manifests:
+      - name: openbao-init-manifests
+        namespace: ai-enclave
+        files:
+          - ../gitops/base/openbao-init.yaml

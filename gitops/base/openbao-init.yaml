@@ -1,0 +1,108 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openbao-init-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/exec", "secrets"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openbao-init-binding
+subjects:
+  - kind: ServiceAccount
+    name: openbao-init-sa
+    namespace: ai-enclave
+roleRef:
+  kind: ClusterRole
+  name: openbao-init-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openbao-init-sa
+  namespace: ai-enclave
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: openbao-auto-init
+  namespace: ai-enclave
+spec:
+  template:
+    spec:
+      serviceAccountName: openbao-init-sa
+      restartPolicy: OnFailure
+      containers:
+        - name: initializer
+          image: docker.io/bitnami/kubectl:latest
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -e
+              echo "⏳ [1/5] Waiting for OpenBao pod to reach Running phase..."
+              until [ "$(kubectl get pod openbao-0 -n ai-enclave -o jsonpath='{.status.phase}' 2>/dev/null)" == "Running" ]; do
+                echo "..."
+                sleep 5
+              done
+              
+              echo "🚀 [2/5] OpenBao pod detected. Verifying initialization status..."
+              # Loop until 'bao status' returns a valid output (handles container start delay)
+              until kubectl exec openbao-0 -n ai-enclave -- bao status >/dev/null 2>&1 || [ $? -eq 2 ]; do
+                sleep 2
+              done
+
+              if kubectl exec openbao-0 -n ai-enclave -- bao status 2>&1 | grep -q "Initialized.*false"; then
+                echo "🔒 [3/5] OpenBao uninitialized. Starting security barrier initialization..."
+                
+                # 1. Initialize and capture payload
+                INIT_PAYLOAD=$(kubectl exec openbao-0 -n ai-enclave -- bao operator init -key-shares=1 -key-threshold=1 -format=json)
+                
+                # 2. Extract tokens (Standard grep for alpine/bitnami compatibility)
+                ROOT_TOKEN=$(echo "$INIT_PAYLOAD" | grep -o '"root_token":"[^"]*' | grep -o '[^"]*$')
+                UNSEAL_KEY=$(echo "$INIT_PAYLOAD" | grep -o '"unseal_keys_b64":\["[^"]*"' | grep -o '[^"]*"' | tail -n 1 | tr -d '"')
+                
+                echo "💾 [4/5] Writing master keys to USB and cluster secrets..."
+                
+                # Save to USB
+                if [ -d "/mnt/usb" ]; then
+                  echo "$INIT_PAYLOAD" > /mnt/usb/openbao-master-keys.json
+                  chmod 600 /mnt/usb/openbao-master-keys.json
+                  echo "✅ Keys backed up to physical USB media (D:)."
+                fi
+
+                # Create/Update Cluster Secret
+                kubectl create secret generic openbao-root-token \
+                  --namespace ai-enclave \
+                  --from-literal=token="$ROOT_TOKEN" \
+                  --dry-run=client -o yaml | kubectl apply -f -
+
+                echo "🔓 [5/5] Performing initial unseal..."
+                kubectl exec openbao-0 -n ai-enclave -- bao operator unseal "$UNSEAL_KEY"
+                
+                echo "✨ OpenBao successfully initialized and unsealed."
+              else
+                echo "ℹ️ OpenBao is already initialized. Checking seal status..."
+                if kubectl exec openbao-0 -n ai-enclave -- bao status 2>&1 | grep -q "Sealed.*true"; then
+                  echo "🔓 Detected sealed vault. Attempting auto-unseal from USB keys..."
+                  if [ -f "/mnt/usb/openbao-master-keys.json" ]; then
+                    UNSEAL_KEY=$(grep -o '"unseal_keys_b64":\["[^"]*"' /mnt/usb/openbao-master-keys.json | grep -o '[^"]*"' | tail -n 1 | tr -d '"')
+                    kubectl exec openbao-0 -n ai-enclave -- bao operator unseal "$UNSEAL_KEY"
+                    echo "✅ Re-unsealed successfully."
+                  else
+                    echo "⚠️ No keys found on USB. Manual unseal required."
+                  fi
+                else
+                  echo "✅ OpenBao is already unsealed and ready."
+                fi
+              fi
+          volumeMounts:
+            - name: usb-mount
+              mountPath: /mnt/usb
+      volumes:
+        - name: usb-mount
+          hostPath:
+            path: /mnt/usb # Points to your physical media on the host OS
