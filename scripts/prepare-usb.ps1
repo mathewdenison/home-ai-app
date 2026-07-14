@@ -169,22 +169,22 @@ if (-not $ScriptsOnly) {
     
     # Model Packages (Only in Full Mode)
     if (-not $SoftwareOnly) {
-        Write-Host "`n[*] Step 6: Compiling individual Model Zarf packages..." -ForegroundColor Yellow
+        Write-Host "`n[*] Step 6: Compiling individual Model Zarf packages directly from cache..." -ForegroundColor Yellow
         
         # 1. 70B GGUF Package
-        Copy-Item "$ModelCache\$70bName" "$ProjectRoot\bootstrap\"
-        & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-model-70b-gguf.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
-        Safe-RemoveItem -Path "$ProjectRoot\bootstrap\$70bName"
+        Copy-Item "$ProjectRoot\bootstrap\zarf-model-70b-gguf.yaml" "$ModelCache\zarf.yaml"
+        & $ZarfBin package create "$ModelCache" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
+        Safe-RemoveItem -Path "$ModelCache\zarf.yaml"
         
         # 2. 14B GGUF Package
-        Copy-Item "$ModelCache\$14bGGUFName" "$ProjectRoot\bootstrap\"
-        & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-model-14b-gguf.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
-        Safe-RemoveItem -Path "$ProjectRoot\bootstrap\$14bGGUFName"
+        Copy-Item "$ProjectRoot\bootstrap\zarf-model-14b-gguf.yaml" "$ModelCache\zarf.yaml"
+        & $ZarfBin package create "$ModelCache" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
+        Safe-RemoveItem -Path "$ModelCache\zarf.yaml"
         
         # 3. 14B AWQ Package
-        Copy-Item "$14bDir" "$ProjectRoot\bootstrap\" -Recurse
-        & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-model-14b-awq.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
-        Safe-RemoveItem -Path "$ProjectRoot\bootstrap\deepseek-r1-distill-qwen-14b-awq" -Recurse
+        Copy-Item "$ProjectRoot\bootstrap\zarf-model-14b-awq.yaml" "$ModelCache\zarf.yaml"
+        & $ZarfBin package create "$ModelCache" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
+        Safe-RemoveItem -Path "$ModelCache\zarf.yaml"
     }
 }
 
