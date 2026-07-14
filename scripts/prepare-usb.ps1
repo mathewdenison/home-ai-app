@@ -48,6 +48,30 @@ if ($Choice -eq "3") {
     Write-Host "`n[*] Running in FULL PAYLOAD mode..." -ForegroundColor Yellow
 }
 
+# 1b. USB Drive Auto-Discovery
+$TargetUSBDrive = $null
+Write-Host "`n[*] Scanning for connected USB flash drives..." -ForegroundColor Yellow
+$RemovableVolumes = Get-Volume | Where-Object { $_.DriveType -eq 'Removable' -and $_.DriveLetter }
+
+if ($RemovableVolumes) {
+    if ($RemovableVolumes.Count -eq 1) {
+        $Drive = $RemovableVolumes[0]
+        $Response = Read-Host "Detected USB Drive $($Drive.DriveLetter): ($($Drive.FileSystemLabel)). Write directly to this drive? [y/N]"
+        if ($Response -eq 'y') { $TargetUSBDrive = "$($Drive.DriveLetter):\" }
+    } else {
+        Write-Host "Multiple removable drives detected:"
+        for ($i = 0; $i -lt $RemovableVolumes.Count; $i++) {
+            Write-Host "  [$i] $($RemovableVolumes[$i].DriveLetter): ($($RemovableVolumes[$i].FileSystemLabel))"
+        }
+        $Selection = Read-Host "Select drive index to write directly to (or press Enter to skip)"
+        if ($Selection -match '^\d+$' -and [int]$Selection -lt $RemovableVolumes.Count) {
+            $TargetUSBDrive = "$($RemovableVolumes[[int]$Selection].DriveLetter):\"
+        }
+    }
+} else {
+    Write-Host "No USB drives detected. Staging will remain local-only." -ForegroundColor Gray
+}
+
 # Ensure local cache folders exist
 if (-not (Test-Path $CacheFolder)) { New-Item -Path $CacheFolder -ItemType Directory -Force | Out-Null }
 if (-not (Test-Path $ModelCache)) { New-Item -Path $ModelCache -ItemType Directory -Force | Out-Null }
@@ -203,4 +227,25 @@ if (Test-Path $LinuxZarfPath) { Copy-Item $LinuxZarfPath "$StagingFolder\zarf" -
 if (Test-Path $ZarfInitPkgPath) { Copy-Item $ZarfInitPkgPath "$StagingFolder\zarf-init-amd64-${ZarfVersion}.tar.zst" -Force }
 Copy-Item "$ProjectRoot\versions.yaml" $StagingFolder -Force
 
+# 10. Direct USB Copy (Optional)
+if ($TargetUSBDrive) {
+    Write-Host "`n[*] Step 8: Copying staging payload to USB drive ($TargetUSBDrive)..." -ForegroundColor Yellow
+    if ($ScriptsOnly) {
+        # Scripts-Only: Target specific folders to avoid 60GB copy
+        Copy-Item -Path (Join-Path $StagingFolder "scripts") -Destination $TargetUSBDrive -Recurse -Force
+        Copy-Item -Path (Join-Path $StagingFolder "versions.yaml") -Destination $TargetUSBDrive -Force
+    } else {
+        # Full or Software: Copy everything
+        Copy-Item -Path "$StagingFolder\*" -Destination $TargetUSBDrive -Recurse -Force
+    }
+    Write-Host "[+] USB drive updated successfully." -ForegroundColor Green
+}
+
 Write-Host "`n[+] Offline USB Payload Preparation Complete! [+]" -ForegroundColor Green
+if (-not $TargetUSBDrive) {
+    Write-Host "==========================================================================" -ForegroundColor Cyan
+    Write-Host "Next Steps:" -ForegroundColor White
+    Write-Host "1. Format your USB flash drive (if first-time setup)." -ForegroundColor White
+    Write-Host "2. Copy updated contents of [$StagingFolder] directly to the root of your USB drive." -ForegroundColor White
+    Write-Host "==========================================================================" -ForegroundColor Cyan
+}
