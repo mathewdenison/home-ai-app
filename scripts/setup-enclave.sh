@@ -201,7 +201,10 @@ if [ "$NODE_CHOICE" = "1" ]; then
 
     echo "🚀 [3/3] Deploying Beelink Gateway AI Container Layer..."
     beelink_pkg=$(ls zarf-package-sovereign-ai-enclave-beelink-*.tar.zst 2>/dev/null | head -n 1)
-    if [ -n "$beelink_pkg" ]; then zarf package deploy "$beelink_pkg" --confirm; fi
+    if [ -n "$beelink_pkg" ]; then 
+        echo "Installing Beelink Software and Cluster Configuration..."
+        zarf package deploy "$beelink_pkg" --confirm
+    fi
 
     echo "🧠 Deploying DeepSeek-R1 Model Weights to Beelink..."
     # Deploy 70B Heavy Model
@@ -217,9 +220,6 @@ if [ "$NODE_CHOICE" = "1" ]; then
         echo "Installing 14B Fallback Model..."
         zarf package deploy "$model_14b_gguf" --confirm
     fi
-
-    kubectl apply -f ../gitops/base/network-policy.yaml
-    kubectl apply -f ../gitops/base/observability-dashboards.yaml
 
     JOIN_TOKEN=$(cat /opt/k3s-data/server/node-token 2>/dev/null || echo "PENDING")
     if [ -d "$USB_ROOT" ] && [ "$JOIN_TOKEN" != "PENDING" ] && [ -n "$LOCAL_IP" ]; then

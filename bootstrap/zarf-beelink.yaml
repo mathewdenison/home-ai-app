@@ -67,3 +67,13 @@ components:
       - quay.io/thanos/thanos:v0.35.1
       - quay.io/kiwigrid/k8s-sidecar:1.27.0
       - quay.io/kiwigrid/k8s-sidecar:1.26.1
+
+  - name: cluster-configuration
+    required: true
+    description: "Deploys cluster-level network policies and observability dashboards"
+    manifests:
+      - name: cluster-manifests
+        namespace: ai-enclave
+        files:
+          - ../gitops/base/network-policy.yaml
+          - ../gitops/base/observability-dashboards.yaml
