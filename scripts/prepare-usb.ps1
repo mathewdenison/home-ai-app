@@ -45,8 +45,22 @@ function Copy-WithProgress {
             $destStream.Write($buffer, 0, $read)
             $processedBytes += $read
             $elapsed = (Get-Date) - $startTime
-            $speed = if ($elapsed.TotalSeconds -gt 0) { $processedBytes / $elapsed.TotalSeconds } else { 0 }
-            $status = "`r[+] Progress: $([math]::Round(($processedBytes / $totalBytes) * 100, 1))% | Done: $([math]::Round($processedBytes / 1GB, 2)) GB / $([math]::Round($totalBytes / 1GB, 2)) GB | Speed: $([math]::Round($speed / 1MB, 2)) MB/s | ETA: $([TimeSpan]::FromSeconds(if ($speed -gt 0) { ($totalBytes - $processedBytes) / $speed } else { 0 }).ToString('hh\:mm\:ss'))   "
+            $totalSeconds = $elapsed.TotalSeconds
+            $speed = 0
+            if ($totalSeconds -gt 0) { $speed = $processedBytes / $totalSeconds }
+            
+            $remainingBytes = $totalBytes - $processedBytes
+            $etaSeconds = 0
+            if ($speed -gt 0) { $etaSeconds = $remainingBytes / $speed }
+            $etaTime = [TimeSpan]::FromSeconds($etaSeconds)
+            
+            $percent = [math]::Round(($processedBytes / $totalBytes) * 100, 1)
+            $doneGB = [math]::Round($processedBytes / 1GB, 2)
+            $totalGB = [math]::Round($totalBytes / 1GB, 2)
+            $speedMB = [math]::Round($speed / 1MB, 2)
+            $etaStr = $etaTime.ToString('hh\:mm\:ss')
+
+            $status = "`r[+] Progress: $percent% | Done: $doneGB GB / $totalGB GB | Speed: $speedMB MB/s | ETA: $etaStr   "
             Write-Host -NoNewline $status
         }
         $sourceStream.Close(); $destStream.Close()
