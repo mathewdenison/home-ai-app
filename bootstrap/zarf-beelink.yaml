@@ -16,9 +16,9 @@ components:
       - docker.io/library/python:3.11-slim
       - docker.io/bitnami/kubectl:latest # Image for the managed OpenBao init job
 
-  - name: infrastructure-helm-charts
+  - name: openbao-security-chart
     required: true
-    description: "Packaged security, registry, and cluster monitoring aggregation charts for Beelink"
+    description: "Packaged OpenBao security barrier Helm chart"
     charts:
       - name: openbao
         url: https://openbao.github.io/openbao-helm
@@ -26,14 +26,31 @@ components:
         namespace: ai-enclave
         valuesFiles:
           - openbao-values.yaml
+    images:
+      - docker.io/hashicorp/vault-k8s:1.7.2
+      - quay.io/openbao/openbao:2.5.5
+      - quay.io/openbao/openbao-csi-provider:2.0.2
+      - docker.io/library/busybox:latest
+      - docker.io/library/alpine:latest
+
+  - name: managed-openbao-initialization
+    required: true
+    description: "Deploys a Kubernetes Job to manage OpenBao security barrier initialization and unsealing"
+    manifests:
+      - name: openbao-init-manifests
+        namespace: ai-enclave
+        files:
+          - ../gitops/base/openbao-init.yaml
+
+  - name: monitoring-infrastructure-charts
+    required: true
+    description: "Packaged cluster monitoring aggregation charts (Prometheus/Grafana)"
+    charts:
       - name: kube-prometheus-stack
         url: https://prometheus-community.github.io/helm-charts
         version: "61.0.0"
         namespace: ai-enclave
     images:
-      - docker.io/hashicorp/vault-k8s:1.7.2
-      - quay.io/openbao/openbao:2.5.5
-      - quay.io/openbao/openbao-csi-provider:2.0.2
       - quay.io/prometheus-operator/prometheus-operator:v0.75.0
       - quay.io/prometheus-operator/prometheus-config-reloader:v0.75.0
       - quay.io/prometheus/prometheus:v2.53.0
@@ -49,14 +66,3 @@ components:
       - quay.io/thanos/thanos:v0.35.1
       - quay.io/kiwigrid/k8s-sidecar:1.27.0
       - quay.io/kiwigrid/k8s-sidecar:1.26.1
-      - docker.io/library/busybox:latest
-      - docker.io/library/alpine:latest
-
-  - name: managed-openbao-initialization
-    required: true
-    description: "Deploys a Kubernetes Job to manage OpenBao security barrier initialization and unsealing"
-    manifests:
-      - name: openbao-init-manifests
-        namespace: ai-enclave
-        files:
-          - ../gitops/base/openbao-init.yaml
