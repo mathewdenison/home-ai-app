@@ -108,6 +108,17 @@ if ($ScriptsOnly -or $SoftwareOnly) {
     } else {
         Write-Host "Cached 70B GGUF model found." -ForegroundColor Green
     }
+
+    # 14B GGUF Download (Fallback for Beelink)
+    $14bName = [regex]::Match($VersionsContent, '14b_gguf_name:\s*"([^"]+)"').Groups[1].Value
+    $14bUrl = [regex]::Match($VersionsContent, '14b_gguf_url:\s*"([^"]+)"').Groups[1].Value
+    $14bGGUFPath = "$ModelCache\$14bName"
+    if (-not (Test-Path $14bGGUFPath)) {
+        Write-Host "Downloading 14B GGUF Fallback Model (~9GB)..." -ForegroundColor Gray
+        Invoke-WebRequest -Uri $14bUrl -OutFile $14bGGUFPath -UseBasicParsing
+    } else {
+        Write-Host "Cached 14B GGUF fallback model found." -ForegroundColor Green
+    }
     
     # 14B AWQ Download (Using huggingface-cli if present, or simple web requests for basic files)
     $14bDir = "$ModelCache\deepseek-r1-distill-qwen-14b-awq"
@@ -152,8 +163,10 @@ if (-not $ScriptsOnly) {
         
         # Link cached files into bootstrap folder temporarily for Zarf create
         Copy-Item "$ModelCache\$70bName" "$ProjectRoot\bootstrap\"
-        & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-model-70b.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
+        Copy-Item "$ModelCache\$14bName" "$ProjectRoot\bootstrap\"
+        & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-models-beelink.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
         Remove-Item "$ProjectRoot\bootstrap\$70bName"
+        Remove-Item "$ProjectRoot\bootstrap\$14bName"
         
         Copy-Item "$14bDir" "$ProjectRoot\bootstrap\" -Recurse
         & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-model-14b.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
