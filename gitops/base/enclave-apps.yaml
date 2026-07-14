@@ -18,6 +18,8 @@ spec:
       labels:
         app: open-webui
     spec:
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true" # Permanently anchors the UI and Vector DB to the Beelink GTR9 Pro
       containers:
         - name: webui-frontend
           image: ghcr.io/open-webui/open-webui:main
@@ -73,6 +75,13 @@ spec:
           envFrom:
             - secretRef:
                 name: runtime-injected-secrets
+          volumeMounts:
+            - name: webui-storage
+              mountPath: /app/backend/data
+      volumes:
+        - name: webui-storage
+          hostPath:
+            path: /home/admin/ai-hub/workspace/open-webui
 ---
 apiVersion: apps/v1
 kind: Deployment

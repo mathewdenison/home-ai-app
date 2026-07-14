@@ -50,26 +50,35 @@ if ($Choice -eq "3") {
 
 # 1b. USB Drive Auto-Discovery (Unified Selection Interface)
 $TargetUSBDrive = $null
-Write-Host "`n[*] Scanning for connected USB flash drives..." -ForegroundColor Yellow
-$RemovableVolumes = Get-Volume | Where-Object { $_.DriveType -eq 'Removable' -and $_.DriveLetter }
+Write-Host "`n[*] Scanning for connected external drives..." -ForegroundColor Yellow
+# Find drives that are Removable OR Fixed (External SSDs) but NOT the C: drive
+$RemovableVolumes = Get-Volume | Where-Object { 
+    ($_.DriveType -eq 'Removable' -or ($_.DriveType -eq 'Fixed' -and $_.DriveLetter -ne 'C')) -and 
+    $_.DriveLetter 
+}
 
 if ($RemovableVolumes) {
-    Write-Host "Available Removable Drives:" -ForegroundColor Cyan
-    for ($i = 0; $i -lt $RemovableVolumes.Count; $i++) {
-        $Vol = $RemovableVolumes[$i]
-        Write-Host "  [$($i + 1)] $($Vol.DriveLetter): ($($Vol.FileSystemLabel))" -ForegroundColor Gray
+    Write-Host "Available External Drives:" -ForegroundColor Cyan
+    $volList = @()
+    # Handle both single objects and arrays from Get-Volume
+    if ($RemovableVolumes -is [Array]) { $volList = $RemovableVolumes } else { $volList = @($RemovableVolumes) }
+
+    for ($i = 0; $i -lt $volList.Count; $i++) {
+        $Vol = $volList[$i]
+        $HealthStr = if ($Vol.HealthStatus -ne 'Healthy') { " ($($Vol.HealthStatus))" } else { "" }
+        Write-Host "  [$($i + 1)] $($Vol.DriveLetter): ($($Vol.FileSystemLabel))$HealthStr" -ForegroundColor Gray
     }
     Write-Host "  [0] None / Local-Only Staging" -ForegroundColor Gray
     
-    $Selection = Read-Host "`nSelect drive number to write directly to [0-$($RemovableVolumes.Count), Default: 0]"
-    if ($Selection -match '^[1-9]\d*$' -and [int]$Selection -le $RemovableVolumes.Count) {
-        $TargetUSBDrive = "$($RemovableVolumes[[int]$Selection - 1].DriveLetter):\"
-        Write-Host "[+] Target USB Drive set to: $TargetUSBDrive" -ForegroundColor Green
+    $Selection = Read-Host "`nSelect drive number to write directly to [0-$($volList.Count), Default: 0]"
+    if ($Selection -match '^[1-9]\d*$' -and [int]$Selection -le $volList.Count) {
+        $TargetUSBDrive = "$($volList[[int]$Selection - 1].DriveLetter):\"
+        Write-Host "[+] Target Drive set to: $TargetUSBDrive" -ForegroundColor Green
     } else {
-        Write-Host "[*] No USB selected. Proceeding with local staging only." -ForegroundColor Gray
+        Write-Host "[*] No drive selected. Proceeding with local staging only." -ForegroundColor Gray
     }
 } else {
-    Write-Host "No USB drives detected. Staging will remain local-only." -ForegroundColor Gray
+    Write-Host "No external drives detected. Staging will remain local-only." -ForegroundColor Gray
 }
 
 # Ensure local cache folders exist
