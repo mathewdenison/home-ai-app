@@ -146,13 +146,50 @@ if (-not $ScriptsOnly) {
         { param($zb, $root, $out) & $zb package create "$root\bootstrap\zarf-4090.yaml" --output "$out" --architecture amd64 --skip-sbom --confirm }
     )
     if (-not $SoftwareOnly) {
-        # Isolated build directories to avoid zarf.yaml race conditions
-        $SBlocks += { param($zb, $root, $out, $cache) $tmp = New-Item "$cache\70b-tmp" -ItemType Directory -Force; Copy-Item "$root\bootstrap\zarf-model-70b-gguf.yaml" "$tmp\zarf.yaml"; & $zb package create "$tmp" --output "$out" --architecture amd64 --skip-sbom --confirm; Remove-Item $tmp -Recurse -Force }
-        $SBlocks += { param($zb, $root, $out, $cache) $tmp = New-Item "$cache\14b-gguf-tmp" -ItemType Directory -Force; Copy-Item "$root\bootstrap\zarf-model-14b-gguf.yaml" "$tmp\zarf.yaml"; & $zb package create "$tmp" --output "$out" --architecture amd64 --skip-sbom --confirm; Remove-Item $tmp -Recurse -Force }
-        $SBlocks += { param($zb, $root, $out, $cache) $tmp = New-Item "$cache\14b-awq-tmp" -ItemType Directory -Force; Copy-Item "$root\bootstrap\zarf-model-14b-awq.yaml" "$tmp\zarf.yaml"; & $zb package create "$tmp" --output "$out" --architecture amd64 --skip-sbom --confirm; Remove-Item $tmp -Recurse -Force }
+        Write-Host "`n[*] Step 6: Compiling individual Model Zarf packages in PARALLEL..." -ForegroundColor Yellow
+        
+        # 1. 70B GGUF Package
+        $SBlocks += { param($zb, $root, $out, $cache, $name) 
+            $tmp = New-Item "$cache\70b-tmp" -ItemType Directory -Force
+            Copy-Item "$root\bootstrap\zarf-model-70b-gguf.yaml" "$tmp\zarf.yaml"
+            New-Item -ItemType HardLink -Path "$tmp\$name" -Value "$cache\$name" -Force | Out-Null
+            & $zb package create "$tmp" --output "$out" --architecture amd64 --skip-sbom --confirm
+            Remove-Item $tmp -Recurse -Force
+        }
+        $Args70b = @($ZarfBin, $ProjectRoot, $StagingFolder, $ModelCache, $70bName)
+
+        # 2. 14B GGUF Package
+        $SBlocks += { param($zb, $root, $out, $cache, $name) 
+            $tmp = New-Item "$cache\14b-gguf-tmp" -ItemType Directory -Force
+            Copy-Item "$root\bootstrap\zarf-model-14b-gguf.yaml" "$tmp\zarf.yaml"
+            New-Item -ItemType HardLink -Path "$tmp\$name" -Value "$cache\$name" -Force | Out-Null
+            & $zb package create "$tmp" --output "$out" --architecture amd64 --skip-sbom --confirm
+            Remove-Item $tmp -Recurse -Force
+        }
+        $Args14bGGUF = @($ZarfBin, $ProjectRoot, $StagingFolder, $ModelCache, $14bGGUFName)
+
+        # 3. 14B AWQ Package
+        $SBlocks += { param($zb, $root, $out, $cache) 
+            $tmp = New-Item "$cache\14b-awq-tmp" -ItemType Directory -Force
+            Copy-Item "$root\bootstrap\zarf-model-14b-awq.yaml" "$tmp\zarf.yaml"
+            # Junction for directories
+            $targetDir = Join-Path $tmp "deepseek-r1-distill-qwen-14b-awq"
+            $sourceDir = Join-Path $cache "deepseek-r1-distill-qwen-14b-awq"
+            New-Item -ItemType Junction -Path "$targetDir" -Value "$sourceDir" -Force | Out-Null
+            & $zb package create "$tmp" --output "$out" --architecture amd64 --skip-sbom --confirm
+            Remove-Item $tmp -Recurse -Force
+        }
+        $Args14bAWQ = @($ZarfBin, $ProjectRoot, $StagingFolder, $ModelCache)
+        
+        # Launch Jobs
+        $BuildJobs += Start-Job -ScriptBlock $SBlocks[2] -ArgumentList $Args70b
+        $BuildJobs += Start-Job -ScriptBlock $SBlocks[3] -ArgumentList $Args14bGGUF
+        $BuildJobs += Start-Job -ScriptBlock $SBlocks[4] -ArgumentList $Args14bAWQ
     }
 
-    foreach ($sb in $SBlocks) { $BuildJobs += Start-Job -ScriptBlock $sb -ArgumentList $ZarfBin, $ProjectRoot, $StagingFolder, $ModelCache }
+    # Software Jobs (Beelink and 4090)
+    $BuildJobs += Start-Job -ScriptBlock $SBlocks[0] -ArgumentList $ZarfBin, $ProjectRoot, $StagingFolder
+    $BuildJobs += Start-Job -ScriptBlock $SBlocks[1] -ArgumentList $ZarfBin, $ProjectRoot, $StagingFolder
     
     Write-Host "[*] Waiting for parallel compilations to complete (this utilizes all CPU cores)..." -ForegroundColor Gray
     Wait-Job $BuildJobs | Out-Null
