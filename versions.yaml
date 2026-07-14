@@ -19,3 +19,6 @@ charts:
 
 models:
   vllm_default: "neuralmagic/DeepSeek-R1-Distill-Qwen-14B-AWQ"
+  70b_gguf_name: "DeepSeek-R1-Distill-Llama-70B-Q4_K_M.gguf"
+  70b_gguf_url: "https://huggingface.co/unsloth/DeepSeek-R1-Distill-Llama-70B-GGUF/resolve/main/DeepSeek-R1-Distill-Llama-70B-Q4_K_M.gguf"
+  14b_awq_repo: "casperhansen/deepseek-r1-distill-qwen-14b-awq"

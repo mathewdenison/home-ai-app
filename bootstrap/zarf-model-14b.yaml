@@ -1,0 +1,14 @@
+kind: ZarfPackageConfig
+metadata:
+  name: sovereign-ai-model-14b
+  description: "Offline DeepSeek-R1-Distill-Qwen-14B AWQ Model Weights"
+  version: "1.0.0"
+
+components:
+  - name: model-14b-weights
+    required: true
+    description: "Deploys the 14B AWQ model directory to the host for vLLM usage"
+    files:
+      - source: deepseek-r1-distill-qwen-14b-awq/
+        target: /home/admin/ai-hub/workspace/vllm/deepseek-r1-distill-qwen-14b-awq/
+        executable: false

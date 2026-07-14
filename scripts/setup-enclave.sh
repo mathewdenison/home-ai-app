@@ -42,9 +42,6 @@ if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-un
         fi
 
         # Safely unmount all active Kubernetes pod volumes and container filesystems.
-        # This is critical to prevent "Device or resource busy" blocks during directory cleanup.
-        # Sorting in reverse ensures sub-mounts are detached before their parent directories,
-        # and using 'umount -l' (lazy unmount) immediately detaches the filesystem from the directory tree.
         echo "Safely unmounting busy container filesystems and pod volumes..."
         for mount_point in $(mount | grep -E " /var/lib/kubelet| /var/lib/rancher| /opt/k3s-data| /var/lib/containerd" | awk '{print $3}' | sort -r); do
             echo "Unmounting busy resource: $mount_point"
@@ -94,38 +91,22 @@ echo "📦 [2/3] Initializing Zarf Local Cluster Layer..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! command -v zarf >/dev/null 2>&1; then
     echo "🔍 Zarf CLI not found in system PATH. Checking local directory for binary..."
-    
-    # Check if a local 'zarf' binary exists in current dir (on USB) or script's directory
     ZARF_BIN=""
-    if [ -f "./zarf" ]; then
-        ZARF_BIN="./zarf"
-    elif [ -f "$SCRIPT_DIR/zarf" ]; then
-        ZARF_BIN="$SCRIPT_DIR/zarf"
-    elif [ -f "$SCRIPT_DIR/../zarf" ]; then
-        ZARF_BIN="$SCRIPT_DIR/../zarf"
+    if [ -f "./zarf" ]; then ZARF_BIN="./zarf"
+    elif [ -f "$SCRIPT_DIR/zarf" ]; then ZARF_BIN="$SCRIPT_DIR/zarf"
+    elif [ -f "$SCRIPT_DIR/../zarf" ]; then ZARF_BIN="$SCRIPT_DIR/../zarf"
     fi
 
     if [ -n "$ZARF_BIN" ]; then
         echo "🚀 Installing local Zarf binary to system directories..."
         cp "$ZARF_BIN" /usr/local/bin/zarf
         chmod +x /usr/local/bin/zarf
-        # Also copy to /usr/bin/zarf as a robust fallback (ensures secure_path compliance under sudoers)
         cp "$ZARF_BIN" /usr/bin/zarf
         chmod +x /usr/bin/zarf
-        # Force bash to clear cached command paths
         hash -r
     else
-        echo "❌ Error: Zarf is not installed, and no Linux 'zarf' binary was found in this directory."
-        echo "Please download the Linux amd64 static 'zarf' binary and place it in the same folder as this script on your USB."
+        echo "❌ Error: Zarf is not installed, and no Linux 'zarf' binary was found."
         exit 1
-    fi
-else
-    # Even if Zarf is already installed somewhere, ensure a copy exists in /usr/bin/zarf
-    # to protect against secure_path restrictions on /usr/local/bin
-    if [ ! -f "/usr/bin/zarf" ]; then
-        cp "$(command -v zarf)" /usr/bin/zarf
-        chmod +x /usr/bin/zarf
-        hash -r
     fi
 fi
 
@@ -140,15 +121,12 @@ echo ""
 # Find USB Root directory for configuration sharing
 USB_ROOT="/mnt/usb"
 if [ ! -d "$USB_ROOT" ]; then
-    # Fallback to the parent of the scripts folder
     USB_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 fi
 
 JOIN_INFO_FILE="$USB_ROOT/cluster-join-info.env"
 
-# PRE-INSTALLATION FAPOLICYD COMPLIANCE (STIG Hardening Exception)
-# fapolicyd blocks any binary execution from non-system paths (like our custom /opt/k3s-data directory,
-# dynamic network plugin paths in /opt/cni, kubelet volumes, and K3s runtime states in /run).
+# PRE-INSTALLATION FAPOLICYD COMPLIANCE
 FAPOLICY_RULES="/etc/fapolicyd/rules.d/80-k3s.rules"
 if [ -d "/etc/fapolicyd/rules.d" ] && [ ! -f "$FAPOLICY_RULES" ]; then
     echo "🔒 Configuring fapolicyd STIG exceptions for K3s execution paths..."
@@ -161,216 +139,104 @@ allow perm=any all : dir=/run/containerd/
 allow perm=any all : dir=/var/lib/containerd/
 allow perm=any all : dir=/var/lib/rancher/
 EOF
-    # Load rules and restart fapolicyd daemon if active
-    if command -v fagenrules >/dev/null 2>&1; then
-        fagenrules --load || true
-    fi
-    if systemctl is-active fapolicyd &>/dev/null; then
-        echo "Restarting fapolicyd to apply new execution rules..."
-        systemctl restart fapolicyd || true
-    fi
+    if command -v fagenrules >/dev/null 2>&1; then fagenrules --load || true; fi
+    if systemctl is-active fapolicyd &>/dev/null; then systemctl restart fapolicyd || true; fi
 fi
 
 # PRE-INSTALLATION SELINUX AND MOUNT CONFIGURATION
-# To bypass /var noexec, we must use a custom data directory (/opt/k3s-data).
-# To bypass the SELinux block on custom paths, we apply Path Equivalence, instructing SELinux 
-# to treat /opt/k3s-data as mathematically equivalent to the default /var/lib/rancher/k3s path.
 echo "🔗 Configuring custom K3s directory with STIG & SELinux path equivalence..."
-mkdir -p /opt/k3s-data
-mkdir -p /etc/rancher/k3s
-
-# Apply the SELinux path equivalence rule (semanage is pre-installed on Rocky STIG profiles)
+mkdir -p /opt/k3s-data /etc/rancher/k3s
 if command -v semanage >/dev/null 2>&1; then
-    echo "Equating /opt/k3s-data to /var/lib/rancher/k3s in SELinux policy..."
     semanage fcontext -a -e /var/lib/rancher/k3s "/opt/k3s-data" || true
-    echo "Restoring SELinux security contexts on /opt/k3s-data recursively..."
     restorecon -R -v /opt/k3s-data || true
 else
-    # Fallback to general container context if semanage is not available
-    echo "Applying standard container security context to /opt/k3s-data..."
     chcon -R -t container_var_lib_t /opt/k3s-data 2>/dev/null || true
 fi
 
-# Intelligently find local network IP using standard 'ip addr show'
-# This is completely immune to hostname lookup blocks standard on STIG-hardened environments.
-# Filters out local loopback (127.0.0.1) and K3s/Docker bridge subnets, selecting the first active host IP.
+# Intelligently find local network IP
 LOCAL_IP=""
 for ip_entry in $(ip -o -4 addr show | awk '{print $4}' | cut -d/ -f1); do
     if [ "$ip_entry" != "127.0.0.1" ] && [[ "$ip_entry" != 172.17.* ]] && [[ "$ip_entry" != 10.42.* ]]; then
-        # Prefer standard private network ranges (10.x, 192.168.x, 172.x)
         if [[ "$ip_entry" =~ ^10\. ]] || [[ "$ip_entry" =~ ^192\.168\. ]] || [[ "$ip_entry" =~ ^172\. ]]; then
             LOCAL_IP="$ip_entry"
             break
         fi
-        # Fallback to the first non-loopback IP found if no standard private range matches
-        if [ -z "$LOCAL_IP" ]; then
-            LOCAL_IP="$ip_entry"
-        fi
+        if [ -z "$LOCAL_IP" ]; then LOCAL_IP="$ip_entry"; fi
     fi
 done
-
-# Clean up any potential whitespace/newlines in LOCAL_IP
 LOCAL_IP=$(echo "$LOCAL_IP" | tr -d '[:space:]')
 
-# AIRGAPPED ROUTING COMPLIANCE (Default Route Workaround)
-# In isolated or offline enclaves, if no default gateway is configured in the OS, K3s (specifically the embedded
-# Kubernetes ChooseHostInterface prober) will fail to auto-detect the network and crash-loop with:
-# "no default routes found in '/proc/net/route' or '/proc/net/ipv6_route'"
-# To prevent this, we scan the routing table and if no default route is found, we dynamically identify the first
-# active physical network interface and add a fallback local route pointing to its own IP address.
+# AIRGAPPED ROUTING COMPLIANCE
 if ! ip route | grep -q "^default"; then
     echo "🌐 No default gateway found in routing table (required by K3s auto-detection)."
-    
-    # Scan for the first active non-loopback, non-virtual IPv4 interface on the host
     ACTIVE_IFACE=""
     ACTIVE_IP=""
     for line in $(ip -o -4 addr show | awk '{print $2":"$4}'); do
         iface=$(echo "$line" | cut -d: -f1)
-        ip_with_mask=$(echo "$line" | cut -d: -f2)
-        ip=$(echo "$ip_with_mask" | cut -d/ -f1)
-        
-        # Filter out local loopback, docker, tailscale, and CNI virtual interfaces
+        ip=$(echo "$line" | cut -d: -f2 | cut -d/ -f1)
         if [ "$iface" != "lo" ] && [[ "$iface" != docker* ]] && [[ "$iface" != veth* ]] && [[ "$iface" != flano* ]] && [[ "$iface" != cni* ]] && [[ "$iface" != tailscale* ]]; then
-            ACTIVE_IFACE="$iface"
-            ACTIVE_IP="$ip"
-            break
+            ACTIVE_IFACE="$iface"; ACTIVE_IP="$ip"; break
         fi
     done
-    
     if [ -n "$ACTIVE_IFACE" ] && [ -n "$ACTIVE_IP" ]; then
-        echo "Adding fallback local default route on $ACTIVE_IFACE via $ACTIVE_IP..."
         ip route add default via "$ACTIVE_IP" dev "$ACTIVE_IFACE" metric 1000 || true
     fi
 fi
 
 # SILENCE VERBOSE KERNEL NETWORKING CONSOLE SPAM
-# Whenever virtual ethernet links (veth*) or CNI bridge ports are created, brought up, or attached,
-# the Linux kernel net core writes status messages directly to /dev/kmsg, which spams the active terminal console.
-# We set kernel.printk console loglevel to 3 (errors only) to permanently silence this CNI/veth console spam, 
-# while still allowing historical logs to be captured by systemd-journald.
-echo "🤫 Silencing kernel CNI/veth network interface console messages..."
 sysctl -w kernel.printk="3 4 1 7" >/dev/null 2>&1 || true
 
-# Write native K3s configuration with robust IPv4-only and interface-binding constraints.
-# Setting 'node-ip' guarantees K3s binds strictly to your direct Cat6 physical pipeline network interface,
-# completely preventing it from binding to public WAN or host-level Mullvad VPN virtual interfaces.
-# If LOCAL_IP is empty or invalid, we skip node-ip to let K3s auto-detect, preventing startup crashes.
+# Write native K3s configuration
 cat <<EOF > /etc/rancher/k3s/config.yaml
 data-dir: /opt/k3s-data
 flannel-backend: vxlan
 EOF
-
 if [ -n "$LOCAL_IP" ] && [[ "$LOCAL_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "node-ip: \"$LOCAL_IP\"" >> /etc/rancher/k3s/config.yaml
-    echo "✅ Successfully bound K3s node-ip to local interface address: $LOCAL_IP"
-else
-    echo "⚠️ Warning: No valid local IPv4 address detected for interface binding. Skipping 'node-ip' configuration..."
 fi
 
 if [ "$NODE_CHOICE" = "1" ]; then
     echo "Configuring as Beelink Gateway (Control Plane Server)..."
-
-    # Bootstrap control plane with registry, agent, and K3s pointing to /opt/k3s-data
     K3S_DATA_DIR=/opt/k3s-data zarf init --components k3s --confirm
 
     echo "🚀 [3/3] Deploying Beelink Gateway AI Container Layer..."
-    # Find and deploy Beelink-specific package
     beelink_pkg=$(ls zarf-package-sovereign-ai-enclave-beelink-*.tar.zst 2>/dev/null | head -n 1)
-    if [ -n "$beelink_pkg" ] && [ -f "$beelink_pkg" ]; then
-        echo "Deploying Beelink Gateway package: $beelink_pkg"
-        zarf package deploy "$beelink_pkg" --confirm
-    else
-        echo "❌ Error: Beelink Zarf package (zarf-package-sovereign-ai-enclave-beelink-*.tar.zst) not found!"
-        exit 1
-    fi
+    if [ -n "$beelink_pkg" ]; then zarf package deploy "$beelink_pkg" --confirm; fi
 
-    # Apply Cluster-Level GitOps Configurations (Server/Control-Plane only)
+    echo "🧠 Deploying DeepSeek-R1 70B Model Weights..."
+    model_70b=$(ls zarf-package-sovereign-ai-model-70b-*.tar.zst 2>/dev/null | head -n 1)
+    if [ -n "$model_70b" ]; then zarf package deploy "$model_70b" --confirm; fi
+
     kubectl apply -f ../gitops/base/network-policy.yaml
     kubectl apply -f ../gitops/base/observability-dashboards.yaml
 
-    # Retrieve Join Token natively from custom /opt/k3s-data directory
     JOIN_TOKEN=$(cat /opt/k3s-data/server/node-token 2>/dev/null || echo "PENDING")
-
-    # Write connection details to the USB drive for seamless plug-and-play join on Node 2!
-    if [ -d "$USB_ROOT" ] && [ "$JOIN_TOKEN" != "PENDING" ] && [ -n "$LOCAL_IP" ] && [[ "$LOCAL_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "Writing cluster join configuration to USB drive for the worker node..."
+    if [ -d "$USB_ROOT" ] && [ "$JOIN_TOKEN" != "PENDING" ] && [ -n "$LOCAL_IP" ]; then
         echo "SERVER_IP=$LOCAL_IP" > "$JOIN_INFO_FILE"
         echo "NODE_TOKEN=$JOIN_TOKEN" >> "$JOIN_INFO_FILE"
-        # Sync changes to ensure it's written completely to physical media
         sync || true
     fi
-
-    echo ""
-    echo "=========================================================================="
     echo "✅ Day-Zero Enclave Cluster Initialization Complete on Beelink Gateway!"
-    echo "=========================================================================="
-    echo "The cluster join configuration has been written directly to your USB drive!"
-    echo "Simply plug this USB into your RTX 4090 Workstation and run the same script."
-    echo "=========================================================================="
-    echo "Server IP Address: $LOCAL_IP"
-    echo "K3s Node Join Token: $JOIN_TOKEN"
-    echo "=========================================================================="
 
 elif [ "$NODE_CHOICE" = "2" ]; then
     echo "Configuring as RTX 4090 Workstation (Worker Node)..."
-    
-    SERVER_IP=""
-    NODE_TOKEN=""
-
-    # Attempt Plug-and-Play auto-discovery of connection details from USB
-    if [ -f "$JOIN_INFO_FILE" ]; then
-        echo "🔌 Found plug-and-play join configuration on USB at $JOIN_INFO_FILE!"
-        source "$JOIN_INFO_FILE"
-        echo "Auto-detected Server IP: $SERVER_IP"
-    fi
-
-    # Fallback to interactive prompts if join info is missing or incomplete
-    if [ -z "$SERVER_IP" ] || [ -z "$NODE_TOKEN" ]; then
-        echo "⚠️ Join configuration not found on USB. Falling back to manual entry..."
+    SERVER_IP=""; NODE_TOKEN=""
+    if [ -f "$JOIN_INFO_FILE" ]; then source "$JOIN_INFO_FILE"; fi
+    if [ -z "$SERVER_IP" ]; then
         read -p "Enter Beelink Gateway Server IP Address: " SERVER_IP
         read -p "Enter K3s Node Join Token: " NODE_TOKEN
-        echo ""
     fi
-
-    if [ -z "$SERVER_IP" ] || [ -z "$NODE_TOKEN" ]; then
-        echo "❌ Error: Both Server IP and Node Join Token are required to join the cluster."
-        exit 1
-    fi
-
-    # Network verification check before starting installation work!
-    echo "🔗 Verifying network connectivity to Beelink Gateway ($SERVER_IP:6443)..."
-    if ! timeout 5 bash -c "cat < /dev/null > /dev/tcp/${SERVER_IP}/6443" 2>/dev/null; then
-        echo "❌ Error: Cannot reach the Beelink Gateway at $SERVER_IP on port 6443."
-        echo "Please verify before retrying:"
-        echo "  1. The Beelink Gateway is powered on and K3s is running."
-        echo "  2. The direct Cat6 ethernet cable is plugged into both nodes."
-        echo "  3. The local network interfaces are active and configured with IPs in the same subnet (e.g. 10.0.0.x)."
-        exit 1
-    else
-        echo "✅ Network connectivity verified!"
-    fi
-
-    # Bootstrap worker node in agent mode pointing to the Beelink Gateway (pointing to /opt/k3s-data)
     K3S_DATA_DIR=/opt/k3s-data zarf init --components k3s --set K3S_ARGS="agent --server https://${SERVER_IP}:6443 --token ${NODE_TOKEN}" --confirm
 
     echo "🚀 [3/3] Deploying RTX 4090 Workstation GPU AI Container Layer..."
-    # Find and deploy 4090-specific package
     workstation_pkg=$(ls zarf-package-sovereign-ai-enclave-4090-*.tar.zst 2>/dev/null | head -n 1)
-    if [ -n "$workstation_pkg" ] && [ -f "$workstation_pkg" ]; then
-        echo "Deploying RTX 4090 package: $workstation_pkg"
-        zarf package deploy "$workstation_pkg" --confirm
-    else
-        echo "❌ Error: RTX 4090 Workstation Zarf package (zarf-package-sovereign-ai-enclave-4090-*.tar.zst) not found!"
-        exit 1
-    fi
+    if [ -n "$workstation_pkg" ]; then zarf package deploy "$workstation_pkg" --confirm; fi
 
-    echo ""
-    echo "=========================================================================="
+    echo "🧠 Deploying DeepSeek-R1 14B Model Weights..."
+    model_14b=$(ls zarf-package-sovereign-ai-model-14b-*.tar.zst 2>/dev/null | head -n 1)
+    if [ -n "$model_14b" ]; then zarf package deploy "$model_14b" --confirm; fi
+
     echo "✅ Day-Zero Enclave Cluster Initialization Complete on RTX 4090 Node!"
-    echo "This worker is now fully joined to the Beelink Gateway control plane."
-    echo "=========================================================================="
-
 else
-    echo "❌ Error: Invalid selection."
-    exit 1
+    echo "❌ Error: Invalid selection."; exit 1
 fi

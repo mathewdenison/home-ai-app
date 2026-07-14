@@ -143,18 +143,23 @@ spec:
       containers:
         - name: vllm-core
           image: docker.io/vllm/vllm-openai:latest
-          args: ["--model", "neuralmagic/DeepSeek-R1-Distill-Qwen-14B-AWQ", "--host", "0.0.0.0", "--port", "11434"]
+          args: ["--model", "/models/deepseek-r1-distill-qwen-14b-awq", "--host", "0.0.0.0", "--port", "11434"]
           resources:
             limits:
               nvidia.com/gpu: "1"
           volumeMounts:
             - mountPath: /dev/shm
               name: dshm # Bypasses Rocky's STIG non-execution lock via isolated RAM allocation
+            - mountPath: /models
+              name: model-storage
       volumes:
         - name: dshm
           emptyDir:
             medium: Memory
             sizeLimit: 16Gi
+        - name: model-storage
+          hostPath:
+            path: /home/admin/ai-hub/workspace/vllm
 ---
 apiVersion: apps/v1
 kind: Deployment
