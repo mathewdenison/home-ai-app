@@ -105,27 +105,29 @@ if ($ScriptsOnly -or $SoftwareOnly) {
     # 70B GGUF Download
     $70bPath = "$ModelCache\$70bName"
     if (-not (Test-Path $70bPath)) {
-        Write-Host "Downloading 70B GGUF Model (~40GB)... This may take time." -ForegroundColor Gray
-        Invoke-WebRequest -Uri $70bUrl -OutFile $70bPath -UseBasicParsing
+        Write-Host "Downloading 70B GGUF Model (~43GB) via curl... This is MUCH faster." -ForegroundColor Yellow
+        & curl.exe -L -C - "$70bUrl" -o "$70bPath"
     } else { Write-Host "Cached 70B GGUF model found." -ForegroundColor Green }
     
     # 14B GGUF Download
     $14bGGUFPath = "$ModelCache\$14bGGUFName"
     if (-not (Test-Path $14bGGUFPath)) {
-        Write-Host "Downloading 14B GGUF Model (~9GB)..." -ForegroundColor Gray
-        Invoke-WebRequest -Uri $14bGGUFUrl -OutFile $14bGGUFPath -UseBasicParsing
+        Write-Host "Downloading 14B GGUF Model (~9GB) via curl..." -ForegroundColor Yellow
+        & curl.exe -L -C - "$14bGGUFUrl" -o "$14bGGUFPath"
     } else { Write-Host "Cached 14B GGUF model found." -ForegroundColor Green }
     
     # 14B AWQ Download
     $14bDir = "$ModelCache\deepseek-r1-distill-qwen-14b-awq"
     if (-not (Test-Path $14bDir)) {
         New-Item -Path $14bDir -ItemType Directory -Force | Out-Null
-        Write-Host "Downloading 14B AWQ Model weights..." -ForegroundColor Gray
+        Write-Host "Downloading 14B AWQ Model weights via curl..." -ForegroundColor Yellow
         $files = @("config.json", "generation_config.json", "model.safetensors", "quantization_config.json", "tokenizer.json", "tokenizer_config.json", "vocab.json", "merges.txt", "special_tokens_map.json")
         foreach ($f in $files) {
             $fUrl = "https://huggingface.co/$14bRepo/resolve/main/$f"
             $fPath = "$14bDir\$f"
-            if (-not (Test-Path $fPath)) { Invoke-WebRequest -Uri $fUrl -OutFile $fPath -UseBasicParsing }
+            if (-not (Test-Path $fPath)) { 
+                & curl.exe -L -C - "$fUrl" -o "$fPath"
+            }
         }
     } else { Write-Host "Cached 14B AWQ model directory found." -ForegroundColor Green }
 }
