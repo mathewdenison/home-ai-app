@@ -25,13 +25,11 @@ if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-un
     if [[ "$PURGE_CHOICE" =~ ^[Yy]$ ]]; then
         echo "🧹 Purging previous K3s and Zarf cluster state..."
         
-        # Run Zarf's built-in destroy command if available
         if command -v zarf >/dev/null 2>&1; then
             echo "Running zarf destroy..."
             zarf destroy --confirm || true
         fi
 
-        # Run native K3s uninstall scripts if they exist
         if [ -f "/usr/local/bin/k3s-uninstall.sh" ]; then
             echo "Running k3s-uninstall.sh..."
             /usr/local/bin/k3s-uninstall.sh || true
@@ -41,17 +39,14 @@ if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-un
             /usr/local/bin/k3s-agent-uninstall.sh || true
         fi
 
-        # Safely unmount all active Kubernetes pod volumes and container filesystems.
         echo "Safely unmounting busy container filesystems and pod volumes..."
         for mount_point in $(mount | grep -E " /var/lib/kubelet| /var/lib/rancher| /opt/k3s-data| /var/lib/containerd" | awk '{print $3}' | sort -r); do
             echo "Unmounting busy resource: $mount_point"
             umount -l "$mount_point" || true
         done
 
-        # Clean fstab entries
         sed -i '\/var\/lib\/rancher\/k3s/d' /etc/fstab 2>/dev/null || true
 
-        # Completely purge all residual data, configurations, and systemd units
         echo "Cleaning residual directories..."
         rm -rf /var/lib/rancher/k3s
         rm -rf /etc/rancher/k3s
@@ -59,25 +54,18 @@ if [ -f "/usr/local/bin/k3s-uninstall.sh" ] || [ -f "/usr/local/bin/k3s-agent-un
         rm -rf /var/lib/kubelet
         rm -rf /var/lib/containerd
         
-        # Reload systemd to apply service deletion
         systemctl daemon-reload
         
-        # Clean SELinux file contexts for /opt/k3s-data if semanage was used
         if command -v semanage >/dev/null 2>&1; then
             echo "Removing custom SELinux file contexts..."
             semanage fcontext -d -e /var/lib/rancher/k3s "/opt/k3s-data" 2>/dev/null || true
         fi
 
-        # Clean fapolicyd rules for K3s
         if [ -f "/etc/fapolicyd/rules.d/80-k3s.rules" ]; then
             echo "Removing fapolicyd K3s rules..."
             rm -f /etc/fapolicyd/rules.d/80-k3s.rules
-            if command -v fagenrules >/dev/null 2>&1; then
-                fagenrules --load || true
-            fi
-            if systemctl is-active fapolicyd &>/dev/null; then
-                systemctl restart fapolicyd || true
-            fi
+            if command -v fagenrules >/dev/null 2>&1; then fagenrules --load || true; fi
+            if systemctl is-active fapolicyd &>/dev/null; then systemctl restart fapolicyd || true; fi
         fi
         
         echo "✅ Previous state successfully purged! Ready for a fresh, clean install."
@@ -118,10 +106,26 @@ echo "2) RTX 4090 Workstation (Worker Node / K3s Agent)"
 read -p "Enter choice [1-2]: " NODE_CHOICE
 echo ""
 
-# Find USB Root directory for configuration sharing
-USB_ROOT="/mnt/usb"
-if [ ! -d "$USB_ROOT" ]; then
-    USB_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# --- Intelligent Payload Discovery Engine ---
+# This block scans multiple locations to find where your Zarf packages actually live.
+SEARCH_PATHS=("./" "$SCRIPT_DIR/.." "/mnt/usb" "/mnt/media" "/mnt")
+USB_ROOT=""
+
+echo "🔍 Scanning for offline Zarf packages..."
+for path in "${SEARCH_PATHS[@]}"; do
+    # Resolve absolute path
+    abs_path=$(cd "$path" 2>/dev/null && pwd || true)
+    if [ -n "$abs_path" ] && ls "$abs_path"/zarf-package-*.tar.zst >/dev/null 2>&1; then
+        USB_ROOT="$abs_path"
+        echo "📂 Found payload directory at: $USB_ROOT"
+        break
+    fi
+done
+
+if [ -z "$USB_ROOT" ]; then
+    echo "❌ Error: Could not locate any Zarf packages (.tar.zst) in common directories."
+    echo "Please ensure your USB is mounted and you are running the script from the USB drive."
+    exit 1
 fi
 
 JOIN_INFO_FILE="$USB_ROOT/cluster-join-info.env"
@@ -195,29 +199,36 @@ if [ -n "$LOCAL_IP" ] && [[ "$LOCAL_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; 
     echo "node-ip: \"$LOCAL_IP\"" >> /etc/rancher/k3s/config.yaml
 fi
 
+# Helper function to find a package by pattern
+find_pkg() {
+    local pattern="$1"
+    find "$USB_ROOT" -maxdepth 1 -name "$pattern" -print -quit
+}
+
 if [ "$NODE_CHOICE" = "1" ]; then
     echo "Configuring as Beelink Gateway (Control Plane Server)..."
+    # Bootstrap Zarf and K3s Server
+    # Note: K3s init requires the init package to be in the same folder as the zarf binary or the current working directory
+    cp "$USB_ROOT"/zarf-init-amd64-*.tar.zst ./ 2>/dev/null || true
     K3S_DATA_DIR=/opt/k3s-data zarf init --components k3s --confirm
 
     echo "🚀 [3/3] Deploying Beelink Gateway AI Container Layer..."
-    beelink_pkg=$(ls zarf-package-sovereign-ai-enclave-beelink-*.tar.zst 2>/dev/null | head -n 1)
+    beelink_pkg=$(find_pkg "zarf-package-sovereign-ai-enclave-beelink-*.tar.zst")
     if [ -n "$beelink_pkg" ]; then 
-        echo "Installing Beelink Software and Cluster Configuration..."
+        echo "Installing Beelink Software: $beelink_pkg"
         zarf package deploy "$beelink_pkg" --confirm
     fi
 
     echo "🧠 Deploying DeepSeek-R1 Model Weights to Beelink..."
-    # Deploy 70B Heavy Model
-    model_70b=$(ls zarf-package-sovereign-ai-model-70b-gguf-*.tar.zst 2>/dev/null | head -n 1)
+    model_70b=$(find_pkg "zarf-package-sovereign-ai-model-70b-gguf-*.tar.zst")
     if [ -n "$model_70b" ]; then
-        echo "Installing 70B Heavy Model..."
+        echo "Installing 70B Heavy Model: $model_70b"
         zarf package deploy "$model_70b" --confirm
     fi
     
-    # Deploy 14B Fallback Model
-    model_14b_gguf=$(ls zarf-package-sovereign-ai-model-14b-gguf-*.tar.zst 2>/dev/null | head -n 1)
+    model_14b_gguf=$(find_pkg "zarf-package-sovereign-ai-model-14b-gguf-*.tar.zst")
     if [ -n "$model_14b_gguf" ]; then
-        echo "Installing 14B Fallback Model..."
+        echo "Installing 14B Fallback Model: $model_14b_gguf"
         zarf package deploy "$model_14b_gguf" --confirm
     fi
 
@@ -237,15 +248,24 @@ elif [ "$NODE_CHOICE" = "2" ]; then
         read -p "Enter Beelink Gateway Server IP Address: " SERVER_IP
         read -p "Enter K3s Node Join Token: " NODE_TOKEN
     fi
+    
+    # Bootstrap Zarf and K3s Agent
+    cp "$USB_ROOT"/zarf-init-amd64-*.tar.zst ./ 2>/dev/null || true
     K3S_DATA_DIR=/opt/k3s-data zarf init --components k3s --set K3S_ARGS="agent --server https://${SERVER_IP}:6443 --token ${NODE_TOKEN}" --confirm
 
     echo "🚀 [3/3] Deploying RTX 4090 Workstation GPU AI Container Layer..."
-    workstation_pkg=$(ls zarf-package-sovereign-ai-enclave-4090-*.tar.zst 2>/dev/null | head -n 1)
-    if [ -n "$workstation_pkg" ]; then zarf package deploy "$workstation_pkg" --confirm; fi
+    workstation_pkg=$(find_pkg "zarf-package-sovereign-ai-enclave-4090-*.tar.zst")
+    if [ -n "$workstation_pkg" ]; then 
+        echo "Installing 4090 Software: $workstation_pkg"
+        zarf package deploy "$workstation_pkg" --confirm
+    fi
 
     echo "🧠 Deploying DeepSeek-R1 14B AWQ Model Weights to Workstation..."
-    model_14b_awq=$(ls zarf-package-sovereign-ai-model-14b-awq-*.tar.zst 2>/dev/null | head -n 1)
-    if [ -n "$model_14b_awq" ]; then zarf package deploy "$model_14b_awq" --confirm; fi
+    model_14b_awq=$(find_pkg "zarf-package-sovereign-ai-model-14b-awq-*.tar.zst")
+    if [ -n "$model_14b_awq" ]; then 
+        echo "Installing 14B AWQ Weights: $model_14b_awq"
+        zarf package deploy "$model_14b_awq" --confirm
+    fi
 
     echo "✅ Day-Zero Enclave Cluster Initialization Complete on RTX 4090 Node!"
 else
