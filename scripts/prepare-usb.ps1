@@ -78,7 +78,7 @@ $ScriptsOnly = ($Choice -eq "3"); $SoftwareOnly = ($Choice -eq "2")
 
 # 1b. USB Drive Auto-Discovery
 $TargetUSBDrive = $null
-$RemovableVolumes = Get-Volume | Where-Object { ($_.DriveType -eq 'Removable' -or ($_.DriveType -eq 'Fixed' -and $_.DriveLetter -ne 'C')) -and $_.DriveLetter }
+$RemovableVolumes = Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveLetter -ne 'C' }
 if ($RemovableVolumes) {
     Write-Host "`nAvailable External Drives:" -ForegroundColor Cyan
     $volList = if ($RemovableVolumes -is [Array]) { $RemovableVolumes } else { @($RemovableVolumes) }
@@ -89,6 +89,8 @@ if ($RemovableVolumes) {
     Write-Host "  [0] None / Local-Only Staging" -ForegroundColor Gray
     $Selection = Read-Host "`nSelect drive number [0-$($volList.Count), Default: 0]"
     if ($Selection -match '^[1-9]\d*$' -and [int]$Selection -le $volList.Count) { $TargetUSBDrive = "$($volList[[int]$Selection - 1].DriveLetter):\" }
+} else {
+    Write-Host "`nNo external drives detected. Staging will remain local-only." -ForegroundColor Gray
 }
 
 # 2. Setup folders and sync versions
