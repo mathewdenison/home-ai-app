@@ -44,6 +44,7 @@ components:
 
   - name: monitoring-infrastructure-charts
     required: true
+    noWait: true
     description: "Packaged cluster monitoring aggregation charts (Prometheus/Grafana)"
     charts:
       - name: kube-prometheus-stack
