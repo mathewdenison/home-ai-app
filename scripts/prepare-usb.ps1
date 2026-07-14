@@ -28,6 +28,53 @@ function Safe-RemoveItem {
     }
 }
 
+# Helper Function: High-speed copy with real-time GB progress and ETA
+function Copy-WithProgress {
+    param([string]$SourcePath, [string]$DestinationPath)
+    
+    $files = Get-ChildItem -Path $SourcePath -Recurse -File
+    $totalBytes = ($files | Measure-Object -Property Length -Sum).Sum
+    $processedBytes = 0
+    $startTime = Get-Date
+    
+    Write-Host "[*] Total data to transfer: $([math]::Round($totalBytes / 1GB, 2)) GB" -ForegroundColor Gray
+
+    foreach ($file in $files) {
+        $relativeName = $file.FullName.Substring($SourcePath.Length).TrimStart('\')
+        $targetFile = Join-Path $DestinationPath $relativeName
+        $targetDir = Split-Path $targetFile
+        if (-not (Test-Path $targetDir)) { New-Item -ItemType Directory -Path $targetDir -Force | Out-Null }
+        
+        $sourceStream = [System.IO.File]::OpenRead($file.FullName)
+        $destStream = [System.IO.File]::Create($targetFile)
+        $buffer = New-Object byte[] 10MB # 10MB chunk size for high speed
+        
+        while (($read = $sourceStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $destStream.Write($buffer, 0, $read)
+            $processedBytes += $read
+            
+            # Calculate Stats
+            $elapsed = (Get-Date) - $startTime
+            $speed = if ($elapsed.TotalSeconds -gt 0) { $processedBytes / $elapsed.TotalSeconds } else { 0 }
+            $remainingBytes = $totalBytes - $processedBytes
+            $etaSeconds = if ($speed -gt 0) { $remainingBytes / $speed } else { 0 }
+            $eta = [TimeSpan]::FromSeconds($etaSeconds)
+            
+            $progressPercent = [math]::Round(($processedBytes / $totalBytes) * 100, 1)
+            $doneGB = [math]::Round($processedBytes / 1GB, 2)
+            $totalGB = [math]::Round($totalBytes / 1GB, 2)
+            $remainingGB = [math]::Round($remainingBytes / 1GB, 2)
+            $speedMB = [math]::Round($speed / 1MB, 2)
+
+            $status = "`r[+] Progress: $progressPercent% | Done: $doneGB GB / $totalGB GB | Remaining: $remainingGB GB | Speed: $speedMB MB/s | ETA: $($eta.ToString('hh\:mm\:ss'))   "
+            Write-Host -NoNewline $status
+        }
+        $sourceStream.Close()
+        $destStream.Close()
+    }
+    Write-Host "`n"
+}
+
 # Ask user for execution mode (Interactive Toggle)
 echo ""
 Write-Host "Select the USB Preparation Mode:" -ForegroundColor Cyan
@@ -51,7 +98,6 @@ if ($Choice -eq "3") {
 # 1b. USB Drive Auto-Discovery (Unified Selection Interface)
 $TargetUSBDrive = $null
 Write-Host "`n[*] Scanning for connected external drives..." -ForegroundColor Yellow
-# Find drives that are Removable OR Fixed (External SSDs) but NOT the C: drive
 $RemovableVolumes = Get-Volume | Where-Object { 
     ($_.DriveType -eq 'Removable' -or ($_.DriveType -eq 'Fixed' -and $_.DriveLetter -ne 'C')) -and 
     $_.DriveLetter 
@@ -60,7 +106,6 @@ $RemovableVolumes = Get-Volume | Where-Object {
 if ($RemovableVolumes) {
     Write-Host "Available External Drives:" -ForegroundColor Cyan
     $volList = @()
-    # Handle both single objects and arrays from Get-Volume
     if ($RemovableVolumes -is [Array]) { $volList = $RemovableVolumes } else { $volList = @($RemovableVolumes) }
 
     for ($i = 0; $i -lt $volList.Count; $i++) {
@@ -118,7 +163,7 @@ if ($ScriptsOnly) {
     if (-not (Test-Path $LinuxZarfPath)) {
         $LinuxZarfUrl = "https://github.com/zarf-dev/zarf/releases/download/$ZarfVersion/zarf_${ZarfVersion}_Linux_amd64"
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $LinuxZarfUrl -OutFile $LinuxZarfPath -UseBasicParsing
+        & curl.exe -L "$LinuxZarfUrl" -o "$LinuxZarfPath"
     } else {
         Write-Host "Cached Linux Zarf binary exists." -ForegroundColor Green
     }
@@ -132,7 +177,7 @@ if ($ScriptsOnly) {
     Write-Host "`n[*] Step 3b: Downloading matching Zarf Init Package (amd64)..." -ForegroundColor Yellow
     if (-not (Test-Path $ZarfInitPkgPath)) {
         $ZarfInitPkgUrl = "https://github.com/zarf-dev/zarf/releases/download/$ZarfVersion/zarf-init-amd64-${ZarfVersion}.tar.zst"
-        Invoke-WebRequest -Uri $ZarfInitPkgUrl -OutFile $ZarfInitPkgPath -UseBasicParsing
+        & curl.exe -L "$ZarfInitPkgUrl" -o "$ZarfInitPkgPath"
     } else {
         Write-Host "Cached Zarf Init Package exists." -ForegroundColor Green
     }
@@ -183,7 +228,7 @@ if ($ScriptsOnly -or $SoftwareOnly) {
 }
 
 # 7. Clean / Create Staging Folder
-Write-Host "`n[*] Step 4: Preparing staging directory..." -ForegroundColor Yellow
+Write-Host "`n[*] Step 4: Preparing local staging directory..." -ForegroundColor Yellow
 if (-not (Test-Path $StagingFolder)) { New-Item -Path $StagingFolder -ItemType Directory -Force | Out-Null }
 if ($ScriptsOnly) {
     Safe-RemoveItem -Path (Join-Path $StagingFolder "scripts") -Recurse
@@ -243,11 +288,12 @@ if ($TargetUSBDrive) {
         # Scripts-Only: Target specific folders to avoid 60GB copy
         Copy-Item -Path (Join-Path $StagingFolder "scripts") -Destination $TargetUSBDrive -Recurse -Force
         Copy-Item -Path (Join-Path $StagingFolder "versions.yaml") -Destination $TargetUSBDrive -Force
+        Write-Host "[+] USB scripts updated successfully." -ForegroundColor Green
     } else {
-        # Full or Software: Copy everything
-        Copy-Item -Path "$StagingFolder\*" -Destination $TargetUSBDrive -Recurse -Force
+        # Full or Software: Use high-speed copy with real-time metrics for massive files
+        Copy-WithProgress -SourcePath "$StagingFolder\" -DestinationPath $TargetUSBDrive
+        Write-Host "[+] USB drive updated successfully." -ForegroundColor Green
     }
-    Write-Host "[+] USB drive updated successfully." -ForegroundColor Green
 }
 
 Write-Host "`n[+] Offline USB Payload Preparation Complete! [+]" -ForegroundColor Green
