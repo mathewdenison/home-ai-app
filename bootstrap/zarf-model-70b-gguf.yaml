@@ -3,6 +3,7 @@ metadata:
   name: sovereign-ai-model-70b-gguf
   description: "Offline DeepSeek-R1-Distill-Llama-70B GGUF Model Weight"
   version: "1.0.0"
+  uncompressed: true
 
 components:
   - name: model-70b-gguf

@@ -48,18 +48,15 @@ function Copy-WithProgress {
             $totalSeconds = $elapsed.TotalSeconds
             $speed = 0
             if ($totalSeconds -gt 0) { $speed = $processedBytes / $totalSeconds }
-            
             $remainingBytes = $totalBytes - $processedBytes
             $etaSeconds = 0
             if ($speed -gt 0) { $etaSeconds = $remainingBytes / $speed }
             $etaTime = [TimeSpan]::FromSeconds($etaSeconds)
-            
             $percent = [math]::Round(($processedBytes / $totalBytes) * 100, 1)
             $doneGB = [math]::Round($processedBytes / 1GB, 2)
             $totalGB = [math]::Round($totalBytes / 1GB, 2)
             $speedMB = [math]::Round($speed / 1MB, 2)
             $etaStr = $etaTime.ToString('hh\:mm\:ss')
-
             $status = "`r[+] Progress: $percent% | Done: $doneGB GB / $totalGB GB | Speed: $speedMB MB/s | ETA: $etaStr   "
             Write-Host -NoNewline $status
         }
@@ -78,20 +75,23 @@ $ScriptsOnly = ($Choice -eq "3"); $SoftwareOnly = ($Choice -eq "2")
 
 # 1b. USB Drive Auto-Discovery
 $TargetUSBDrive = $null
-$RemovableVolumes = Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveLetter -ne 'C' }
-if ($RemovableVolumes) {
-    Write-Host "`nAvailable External Drives:" -ForegroundColor Cyan
-    $volList = if ($RemovableVolumes -is [Array]) { $RemovableVolumes } else { @($RemovableVolumes) }
+Write-Host "`n[*] Scanning for connected external drives..." -ForegroundColor Yellow
+$volList = @(Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Name -match '^[A-Z]$' -and $_.Name -ne 'C' })
+if ($volList.Count -gt 0) {
+    Write-Host "Available External Drives:" -ForegroundColor Cyan
     for ($i = 0; $i -lt $volList.Count; $i++) {
-        $Vol = $volList[$i]; $Health = if ($Vol.HealthStatus -ne 'Healthy') { " ($($Vol.HealthStatus))" } else { "" }
-        Write-Host "  [$($i + 1)] $($Vol.DriveLetter): ($($Vol.FileSystemLabel))$Health" -ForegroundColor Gray
+        $Vol = $volList[$i]; $Label = ""
+        try { $Label = (Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$($Vol.Name):'").VolumeName } catch {}
+        if (-not $Label) { $Label = "No Label" }
+        Write-Host "  [$($i + 1)] $($Vol.Name): ($Label)" -ForegroundColor Gray
     }
     Write-Host "  [0] None / Local-Only Staging" -ForegroundColor Gray
     $Selection = Read-Host "`nSelect drive number [0-$($volList.Count), Default: 0]"
-    if ($Selection -match '^[1-9]\d*$' -and [int]$Selection -le $volList.Count) { $TargetUSBDrive = "$($volList[[int]$Selection - 1].DriveLetter):\" }
-} else {
-    Write-Host "`nNo external drives detected. Staging will remain local-only." -ForegroundColor Gray
-}
+    if ($Selection -match '^[1-9]\d*$' -and [int]$Selection -le $volList.Count) { 
+        $TargetUSBDrive = "$($volList[[int]$Selection - 1].Name):\" 
+        Write-Host "[+] Target Drive set to: $TargetUSBDrive" -ForegroundColor Green
+    }
+} else { Write-Host "`nNo external drives detected. Staging will remain local-only." -ForegroundColor Gray }
 
 # 2. Setup folders and sync versions
 if (-not (Test-Path $CacheFolder)) { New-Item -Path $CacheFolder -ItemType Directory -Force | Out-Null }
@@ -146,9 +146,10 @@ if (-not $ScriptsOnly) {
         { param($zb, $root, $out) & $zb package create "$root\bootstrap\zarf-4090.yaml" --output "$out" --architecture amd64 --skip-sbom --confirm }
     )
     if (-not $SoftwareOnly) {
-        $SBlocks += { param($zb, $root, $out, $cache, $f) Copy-Item "$root\bootstrap\zarf-model-70b-gguf.yaml" "$cache\zarf.yaml"; & $zb package create "$cache" --output "$out" --architecture amd64 --skip-sbom --fast --confirm; Remove-Item "$cache\zarf.yaml" }
-        $SBlocks += { param($zb, $root, $out, $cache, $f) Copy-Item "$root\bootstrap\zarf-model-14b-gguf.yaml" "$cache\zarf.yaml"; & $zb package create "$cache" --output "$out" --architecture amd64 --skip-sbom --fast --confirm; Remove-Item "$cache\zarf.yaml" }
-        $SBlocks += { param($zb, $root, $out, $cache, $f) Copy-Item "$root\bootstrap\zarf-model-14b-awq.yaml" "$cache\zarf.yaml"; & $zb package create "$cache" --output "$out" --architecture amd64 --skip-sbom --fast --confirm; Remove-Item "$cache\zarf.yaml" }
+        # Isolated build directories to avoid zarf.yaml race conditions
+        $SBlocks += { param($zb, $root, $out, $cache) $tmp = New-Item "$cache\70b-tmp" -ItemType Directory -Force; Copy-Item "$root\bootstrap\zarf-model-70b-gguf.yaml" "$tmp\zarf.yaml"; & $zb package create "$tmp" --output "$out" --architecture amd64 --skip-sbom --confirm; Remove-Item $tmp -Recurse -Force }
+        $SBlocks += { param($zb, $root, $out, $cache) $tmp = New-Item "$cache\14b-gguf-tmp" -ItemType Directory -Force; Copy-Item "$root\bootstrap\zarf-model-14b-gguf.yaml" "$tmp\zarf.yaml"; & $zb package create "$tmp" --output "$out" --architecture amd64 --skip-sbom --confirm; Remove-Item $tmp -Recurse -Force }
+        $SBlocks += { param($zb, $root, $out, $cache) $tmp = New-Item "$cache\14b-awq-tmp" -ItemType Directory -Force; Copy-Item "$root\bootstrap\zarf-model-14b-awq.yaml" "$tmp\zarf.yaml"; & $zb package create "$tmp" --output "$out" --architecture amd64 --skip-sbom --confirm; Remove-Item $tmp -Recurse -Force }
     }
 
     foreach ($sb in $SBlocks) { $BuildJobs += Start-Job -ScriptBlock $sb -ArgumentList $ZarfBin, $ProjectRoot, $StagingFolder, $ModelCache }

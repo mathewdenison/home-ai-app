@@ -3,6 +3,7 @@ metadata:
   name: sovereign-ai-model-14b-awq
   description: "Offline DeepSeek-R1-Distill-Qwen-14B AWQ Model Weights"
   version: "1.0.0"
+  uncompressed: true
 
 components:
   - name: model-14b-awq
