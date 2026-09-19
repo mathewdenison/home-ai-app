@@ -1,5 +1,6 @@
 # Zarf Package Archives (Massive offline tarballs)
 *.tar.zst
+*.exe
 
 # Staging & USB payloads
 /usb-payload/
@@ -31,5 +32,3 @@ desktop.ini
 .idea/
 *.swp
 *.swo
-
-zarf.exe
