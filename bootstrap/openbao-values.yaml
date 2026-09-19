@@ -1,3 +1,12 @@
 server:
   image:
     tag: "2.5.5"
+
+injector:
+  enabled: true
+  image:
+    repository: quay.io/openbao/openbao-csi-provider
+    tag: "2.0.2"
+  agentImage:
+    repository: quay.io/openbao/openbao
+    tag: "2.5.5"

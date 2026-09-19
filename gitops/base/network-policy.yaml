@@ -1,36 +1,33 @@
+# Sovereign Enclave: Zero-Trust Microsegmentation Policy
+# --------------------------------------------------------
+# 1. DEFAULT DENY: Lock down the namespace by default.
+# --------------------------------------------------------
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: restrict-agent-sandbox-egress
+  name: default-deny-all
   namespace: ai-enclave
 spec:
-  podSelector:
-    matchLabels:
-      app: agent-sandbox
+  podSelector: {}
   policyTypes:
+    - Ingress
     - Egress
-  egress:
-    - to:
-        - podSelector:
-            matchLabels:
-              app: lite-llm # Grants API endpoint visibility while locking down cross-namespace pivot vectors
-      ports:
-        - protocol: TCP
-          port: 8000
 ---
+# --------------------------------------------------------
+# 2. CORE SERVICES WHITELISTS
+# --------------------------------------------------------
+
+# Rule: Allow all pods to perform DNS resolution
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: restrict-searxng-egress
+  name: allow-dns-egress
   namespace: ai-enclave
 spec:
-  podSelector:
-    matchLabels:
-      app: searxng
+  podSelector: {}
   policyTypes:
     - Egress
   egress:
-    # Rule 1: Allow DNS resolution so SearXNG can lookup domains like google.com, wikipedia.org, etc.
     - to:
         - namespaceSelector: {}
           podSelector:
@@ -41,15 +38,130 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # Rule 2: Allow HTTP and HTTPS egress to the public internet via Mullvad,
-    # but strictly block RFC 1918 subnets to prevent SSRF or lateral internal port scanning.
+---
+# Rule: Allow Ingress Controller (Traefik) to reach web-facing services
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-traffic
+  namespace: ai-enclave
+spec:
+  podSelector:
+    matchLabels:
+      app: open-webui
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system # K3s Traefik source
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Rule: Open WebUI Outbound Path (The "Backbone")
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: open-webui-egress
+  namespace: ai-enclave
+spec:
+  podSelector:
+    matchLabels:
+      app: open-webui
+  policyTypes:
+    - Egress
+  egress:
+    - to: # To Model Gateway
+        - podSelector:
+            matchLabels:
+              app: litellm-proxy
+      ports:
+        - protocol: TCP
+          port: 4000
+    - to: # To SearXNG
+        - podSelector:
+            matchLabels:
+              app: searxng
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to: # To Image Gen
+        - podSelector:
+            matchLabels:
+              app: comfyui
+      ports:
+        - protocol: TCP
+          port: 8188
+    - to: # To Voice Engine
+        - podSelector:
+            matchLabels:
+              app: speaches-engine
+      ports:
+        - protocol: TCP
+          port: 8000
+    - to: # To OpenBao (Sidecar)
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openbao
+      ports:
+        - protocol: TCP
+          port: 8200
+---
+# Rule: LiteLLM to Inference Engines
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: litellm-inference-egress
+  namespace: ai-enclave
+spec:
+  podSelector:
+    matchLabels:
+      app: litellm-proxy
+  policyTypes:
+    - Egress
+  egress:
+    - to: # To Ollama (Beelink)
+        - podSelector:
+            matchLabels:
+              app: ollama-beelink
+      ports:
+        - protocol: TCP
+          port: 11434
+    - to: # To vLLM (4090 Workstation)
+        - podSelector:
+            matchLabels:
+              app: vllm-engine
+      ports:
+        - protocol: TCP
+          port: 11434
+    - to: # To OpenBao (Sidecar)
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openbao
+      ports:
+        - protocol: TCP
+          port: 8200
+---
+# Rule: SearXNG Restricted Internet Egress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: searxng-restricted-egress
+  namespace: ai-enclave
+spec:
+  podSelector:
+    matchLabels:
+      app: searxng
+  policyTypes:
+    - Egress
+  egress:
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
-              - 10.0.0.0/8       # Block local cluster and Cat6 direct link subnet
-              - 172.16.0.0/12    # Block standard private Class B subnets
-              - 192.168.0.0/16   # Block standard home network Class C subnets
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
       ports:
         - protocol: TCP
           port: 80

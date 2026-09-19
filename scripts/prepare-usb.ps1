@@ -9,10 +9,6 @@ $StagingFolder = "$ProjectRoot\usb-payload"
 $CacheFolder = "$ProjectRoot\.cache"
 $ModelCache = "$CacheFolder\models"
 
-# 1a. Hard-coded path definitions (unconditional)
-$LinuxZarfPath = "$CacheFolder\zarf-linux-amd64"
-$ZarfInitPkgPath = "" # Defined dynamically once version is known
-
 Write-Host "--- Starting Sovereign Enclave offline USB preparation script ---" -ForegroundColor Cyan
 
 # Helper Function: Safely remove files/folders with retries
@@ -32,39 +28,52 @@ function Safe-RemoveItem {
 # Helper Function: High-speed copy with real-time metrics
 function Copy-WithProgress {
     param([string]$SourcePath, [string]$DestinationPath)
-    $files = Get-ChildItem -Path $SourcePath -Recurse -File
-    $totalBytes = ($files | Measure-Object -Property Length -Sum).Sum
+    # Ensure source path ends with a backslash for clean relative pathing
+    $src = $SourcePath.TrimEnd('\') + '\'
+    $files = Get-ChildItem -Path $src -Recurse -File
+    
+    # Calculate total size using a robust Int64 loop to avoid PowerShell 5.1 Measure-Object overflow bugs
+    [long]$totalBytes = 0
+    foreach ($f in $files) { $totalBytes += $f.Length }
+    
     $processedBytes = 0
     $startTime = Get-Date
     Write-Host "--- Total data to transfer: $([math]::Round($totalBytes / 1GB, 2)) GB ---" -ForegroundColor Gray
+
     foreach ($file in $files) {
-        $relativeName = $file.FullName.Substring($SourcePath.Length).TrimStart('\')
+        $relativeName = $file.FullName.Substring($src.Length)
         $targetFile = Join-Path $DestinationPath $relativeName
         $targetDir = Split-Path $targetFile
         if (-not (Test-Path $targetDir)) { New-Item -ItemType Directory -Path $targetDir -Force | Out-Null }
+        
         $sourceStream = [System.IO.File]::OpenRead($file.FullName)
         $destStream = [System.IO.File]::Create($targetFile)
-        $buffer = New-Object byte[] 10MB
-        while (($read = $sourceStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-            $destStream.Write($buffer, 0, $read)
-            $processedBytes += $read
-            $elapsed = (Get-Date) - $startTime
-            $totalSeconds = $elapsed.TotalSeconds
-            $speed = 0
-            if ($totalSeconds -gt 0) { $speed = $processedBytes / $totalSeconds }
-            $remainingBytes = $totalBytes - $processedBytes
-            $etaSeconds = 0
-            if ($speed -gt 0) { $etaSeconds = $remainingBytes / $speed }
-            $etaTime = [TimeSpan]::FromSeconds($etaSeconds)
-            $percent = [math]::Round(($processedBytes / $totalBytes) * 100, 1)
-            $doneGB = [math]::Round($processedBytes / 1GB, 2)
-            $totalGB = [math]::Round($totalBytes / 1GB, 2)
-            $speedMB = [math]::Round($speed / 1MB, 2)
-            $etaStr = $etaTime.ToString('hh\:mm\:ss')
-            $status = "`r--- Progress: $percent% | Done: $doneGB GB / $totalGB GB | Speed: $speedMB MB/s | ETA: $etaStr ---   "
-            Write-Host -NoNewline $status
+        $buffer = New-Object byte[] 10MB # 10MB chunk size
+        
+        try {
+            while (($read = $sourceStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                $destStream.Write($buffer, 0, $read)
+                $processedBytes += $read
+                
+                $elapsed = (Get-Date) - $startTime
+                $speed = if ($elapsed.TotalSeconds -gt 0) { $processedBytes / $elapsed.TotalSeconds } else { 0 }
+                $remainingBytes = $totalBytes - $processedBytes
+                $etaSeconds = if ($speed -gt 0) { $remainingBytes / $speed } else { 0 }
+                $eta = [TimeSpan]::FromSeconds($etaSeconds)
+                
+                $percent = [math]::Round(($processedBytes / $totalBytes) * 100, 1)
+                $doneGB = [math]::Round($processedBytes / 1GB, 2)
+                $totalGB = [math]::Round($totalBytes / 1GB, 2)
+                $speedMB = [math]::Round($speed / 1MB, 2)
+                $etaStr = $eta.ToString('hh\:mm\:ss')
+
+                $status = "`r--- Progress: $percent% | Done: $doneGB GB / $totalGB GB | Speed: $speedMB MB/s | ETA: $etaStr ---   "
+                Write-Host -NoNewline $status
+            }
+        } finally {
+            $sourceStream.Close()
+            $destStream.Close()
         }
-        $sourceStream.Close(); $destStream.Close()
     }
     Write-Host "`n"
 }
@@ -106,17 +115,14 @@ python "$ProjectRoot\scripts\sync-versions.py"
 $ZarfBin = if (Test-Path "$ProjectRoot\zarf.exe") { "$ProjectRoot\zarf.exe" } else { "zarf" }
 $ZarfVersion = try { (& $ZarfBin version).Trim() } catch { "v0.33.0" }
 Write-Host "`n--- Active Zarf Version: $ZarfVersion ---" -ForegroundColor Green
-
-# Update Init Package path now that version is known
 $ZarfInitPkgPath = "$CacheFolder\zarf-init-amd64-${ZarfVersion}.tar.zst"
 
 # 4. Download Binaries
 if (-not $ScriptsOnly) {
-    Write-Host "`n--- Downloading matching Linux amd64 Zarf binary ---" -ForegroundColor Yellow
-    if (-not (Test-Path $LinuxZarfPath)) { & curl.exe -L "https://github.com/zarf-dev/zarf/releases/download/$ZarfVersion/zarf_${ZarfVersion}_Linux_amd64" -o "$LinuxZarfPath" }
-    
-    Write-Host "`n--- Downloading matching Zarf Init Package (amd64) ---" -ForegroundColor Yellow
+    if (-not (Test-Path "$CacheFolder\zarf-linux-amd64")) { & curl.exe -L "https://github.com/zarf-dev/zarf/releases/download/$ZarfVersion/zarf_${ZarfVersion}_Linux_amd64" -o "$CacheFolder\zarf-linux-amd64" }
     if (-not (Test-Path $ZarfInitPkgPath)) { & curl.exe -L "https://github.com/zarf-dev/zarf/releases/download/$ZarfVersion/zarf-init-amd64-${ZarfVersion}.tar.zst" -o "$ZarfInitPkgPath" }
+    
+
 }
 
 # 5. Download Models
@@ -127,9 +133,8 @@ if (-not ($ScriptsOnly -or $SoftwareOnly)) {
     $14bGGUFName = [regex]::Match($VersionsContent, '14b_gguf_name:\s*"([^"]+)"').Groups[1].Value
     $14bGGUFUrl = [regex]::Match($VersionsContent, '14b_gguf_url:\s*"([^"]+)"').Groups[1].Value
     $14bRepo = [regex]::Match($VersionsContent, '14b_awq_repo:\s*"([^"]+)"').Groups[1].Value
-    
-    if (-not (Test-Path "$ModelCache\$70bName")) { Write-Host "--- Downloading 70B GGUF Model (~43GB) via curl... ---" -ForegroundColor Yellow; & curl.exe -L -C - "$70bUrl" -o "$ModelCache\$70bName" }
-    if (-not (Test-Path "$ModelCache\$14bGGUFName")) { Write-Host "--- Downloading 14B GGUF Model (~9GB) via curl... ---" -ForegroundColor Yellow; & curl.exe -L -C - "$14bGGUFUrl" -o "$ModelCache\$14bGGUFName" }
+    if (-not (Test-Path "$ModelCache\$70bName")) { Write-Host "--- Downloading 70B GGUF Model via curl ---" -ForegroundColor Yellow; & curl.exe -L -C - "$70bUrl" -o "$ModelCache\$70bName" }
+    if (-not (Test-Path "$ModelCache\$14bGGUFName")) { Write-Host "--- Downloading 14B GGUF Model via curl ---" -ForegroundColor Yellow; & curl.exe -L -C - "$14bGGUFUrl" -o "$ModelCache\$14bGGUFName" }
     $14bDir = "$ModelCache\deepseek-r1-distill-qwen-14b-awq"
     if (-not (Test-Path $14bDir)) {
         New-Item $14bDir -ItemType Directory -Force | Out-Null
@@ -139,21 +144,34 @@ if (-not ($ScriptsOnly -or $SoftwareOnly)) {
 }
 
 # 6. Clean and Build
-Write-Host "`n--- Preparing staging directory ---" -ForegroundColor Yellow
-if (-not (Test-Path $StagingFolder)) { New-Item $StagingFolder -ItemType Directory -Force | Out-Null }
-if ($ScriptsOnly) { Safe-RemoveItem -Path (Join-Path $StagingFolder "scripts") -Recurse; Safe-RemoveItem -Path (Join-Path $StagingFolder "versions.yaml") }
-else { Safe-RemoveItem $StagingFolder -Recurse; New-Item $StagingFolder -ItemType Directory -Force | Out-Null }
+Write-Host "`n--- Preparing local staging directory ---" -ForegroundColor Yellow
+if ($ScriptsOnly) { 
+    if (-not (Test-Path $StagingFolder)) { New-Item $StagingFolder -ItemType Directory -Force | Out-Null }
+    Safe-RemoveItem -Path (Join-Path $StagingFolder "scripts") -Recurse
+    Safe-RemoveItem -Path (Join-Path $StagingFolder "versions.yaml") 
+} else { 
+    Safe-RemoveItem $StagingFolder -Recurse
+    New-Item $StagingFolder -ItemType Directory -Force | Out-Null 
+}
 
 if (-not $ScriptsOnly) {
-    Write-Host "`n--- Compiling Software and Model packages in PARALLEL ---" -ForegroundColor Yellow
-    $BuildJobs = @()
+    Write-Host "`n--- Compiling Software and Model packages ---" -ForegroundColor Yellow
+    
+    # 1. SOFTWARE PACKAGES (Sequential for path reliability)
+    Write-Host "Compiling Beelink Software package..." -ForegroundColor Gray
+    & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-beelink.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
+    if ($LASTEXITCODE -ne 0) { Write-Error "Failed to compile Beelink software package."; exit $LASTEXITCODE }
+    
+    Write-Host "Compiling 4090 Workstation Software package..." -ForegroundColor Gray
+    & $ZarfBin package create "$ProjectRoot\bootstrap\zarf-4090.yaml" --output "$StagingFolder" --architecture amd64 --skip-sbom --confirm
+    if ($LASTEXITCODE -ne 0) { Write-Error "Failed to compile 4090 workstation software package."; exit $LASTEXITCODE }
 
-    # Define build script blocks
-    $SBlocks = @(
-        { param($zb, $root, $out) & $zb package create "$root\bootstrap\zarf-beelink.yaml" --output "$out" --architecture amd64 --skip-sbom --confirm },
-        { param($zb, $root, $out) & $zb package create "$root\bootstrap\zarf-4090.yaml" --output "$out" --architecture amd64 --skip-sbom --confirm }
-    )
+    # 2. MODEL PACKAGES (Parallel for speed)
     if (-not $SoftwareOnly) {
+        Write-Host "Compiling Model weight packages in PARALLEL..." -ForegroundColor Gray
+        $BuildJobs = @()
+        $SBlocks = @()
+        # [0] 70B GGUF
         $SBlocks += { param($zb, $root, $out, $cache, $name) 
             $tmp = New-Item "$cache\70b-tmp" -ItemType Directory -Force
             Copy-Item "$root\bootstrap\zarf-model-70b-gguf.yaml" "$tmp\zarf.yaml"
@@ -161,6 +179,7 @@ if (-not $ScriptsOnly) {
             & $zb package create "$tmp" --output "$out" --architecture amd64 --skip-sbom --confirm
             Remove-Item $tmp -Recurse -Force
         }
+        # [1] 14B GGUF
         $SBlocks += { param($zb, $root, $out, $cache, $name) 
             $tmp = New-Item "$cache\14b-gguf-tmp" -ItemType Directory -Force
             Copy-Item "$root\bootstrap\zarf-model-14b-gguf.yaml" "$tmp\zarf.yaml"
@@ -168,28 +187,24 @@ if (-not $ScriptsOnly) {
             & $zb package create "$tmp" --output "$out" --architecture amd64 --skip-sbom --confirm
             Remove-Item $tmp -Recurse -Force
         }
+        # [2] 14B AWQ
         $SBlocks += { param($zb, $root, $out, $cache) 
             $tmp = New-Item "$cache\14b-awq-tmp" -ItemType Directory -Force
             Copy-Item "$root\bootstrap\zarf-model-14b-awq.yaml" "$tmp\zarf.yaml"
-            $targetDir = Join-Path $tmp "deepseek-r1-distill-qwen-14b-awq"
-            $sourceDir = Join-Path $cache "deepseek-r1-distill-qwen-14b-awq"
+            $targetDir = Join-Path $tmp "deepseek-r1-distill-qwen-14b-awq"; $sourceDir = Join-Path $cache "deepseek-r1-distill-qwen-14b-awq"
             New-Item -ItemType Junction -Path "$targetDir" -Value "$sourceDir" -Force | Out-Null
             & $zb package create "$tmp" --output "$out" --architecture amd64 --skip-sbom --confirm
             Remove-Item $tmp -Recurse -Force
         }
-    }
 
-    $BuildJobs += Start-Job -ScriptBlock $SBlocks[0] -ArgumentList $ZarfBin, $ProjectRoot, $StagingFolder
-    $BuildJobs += Start-Job -ScriptBlock $SBlocks[1] -ArgumentList $ZarfBin, $ProjectRoot, $StagingFolder
-    if (-not $SoftwareOnly) {
-        $BuildJobs += Start-Job -ScriptBlock $SBlocks[2] -ArgumentList $ZarfBin, $ProjectRoot, $StagingFolder, $ModelCache, $70bName
-        $BuildJobs += Start-Job -ScriptBlock $SBlocks[3] -ArgumentList $ZarfBin, $ProjectRoot, $StagingFolder, $ModelCache, $14bGGUFName
-        $BuildJobs += Start-Job -ScriptBlock $SBlocks[4] -ArgumentList $ZarfBin, $ProjectRoot, $StagingFolder, $ModelCache
+        $BuildJobs += Start-Job -ScriptBlock $SBlocks[0] -ArgumentList $ZarfBin, $ProjectRoot, $StagingFolder, $ModelCache, $70bName
+        $BuildJobs += Start-Job -ScriptBlock $SBlocks[1] -ArgumentList $ZarfBin, $ProjectRoot, $StagingFolder, $ModelCache, $14bGGUFName
+        $BuildJobs += Start-Job -ScriptBlock $SBlocks[2] -ArgumentList $ZarfBin, $ProjectRoot, $StagingFolder, $ModelCache
+
+        Write-Host "Waiting for heavy model compilations to complete..." -ForegroundColor Gray
+        Wait-Job $BuildJobs | Out-Null
+        Receive-Job $BuildJobs
     }
-    
-    Write-Host "--- Waiting for parallel compilations to complete ---" -ForegroundColor Gray
-    Wait-Job $BuildJobs | Out-Null
-    Receive-Job $BuildJobs
 }
 
 # 7. Final Staging
@@ -203,14 +218,21 @@ Get-ChildItem -Path "$ProjectRoot\scripts" | ForEach-Object {
         [System.IO.File]::WriteAllText($TargetFile, $Content, $Utf8NoBom)
     } else { Copy-Item $_.FullName $TargetFile }
 }
-if (Test-Path $LinuxZarfPath) { Copy-Item $LinuxZarfPath "$StagingFolder\zarf" -Force }
+if (Test-Path "$CacheFolder\zarf-linux-amd64") { Copy-Item "$CacheFolder\zarf-linux-amd64" "$StagingFolder\zarf" -Force }
 if (Test-Path $ZarfInitPkgPath) { Copy-Item $ZarfInitPkgPath "$StagingFolder\zarf-init-amd64-${ZarfVersion}.tar.zst" -Force }
+
+
+
 Copy-Item "$ProjectRoot\versions.yaml" $StagingFolder -Force
 
 if ($TargetUSBDrive) {
+    # Final scan and short delay to ensure OS file handles are released
+    Start-Sleep -Seconds 2
     Write-Host "`n--- Copying staging payload to USB drive ($TargetUSBDrive) ---" -ForegroundColor Yellow
-    if ($ScriptsOnly) { Copy-Item (Join-Path $StagingFolder "scripts") $TargetUSBDrive -Recurse -Force; Copy-Item (Join-Path $StagingFolder "versions.yaml") $TargetUSBDrive -Force }
-    else { Copy-WithProgress -SourcePath "$StagingFolder\" -DestinationPath $TargetUSBDrive }
+    if ($ScriptsOnly) { 
+        Copy-Item (Join-Path $StagingFolder "scripts") $TargetUSBDrive -Recurse -Force
+        Copy-Item (Join-Path $StagingFolder "versions.yaml") $TargetUSBDrive -Force 
+    } else { Copy-WithProgress -SourcePath "$StagingFolder" -DestinationPath $TargetUSBDrive }
     Write-Host "--- USB drive updated successfully ---" -ForegroundColor Green
 }
 Write-Host "`n--- Offline USB Payload Preparation Complete! ---" -ForegroundColor Green

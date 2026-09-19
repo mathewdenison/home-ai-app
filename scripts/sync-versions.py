@@ -40,7 +40,10 @@ def update_images(content, versions):
         (r'(?:ghcr\.io/)?matatonic/openedai-speech:[^\s\n\r"\'`\]]+', versions['images.openedai_speech']),
         (r'(?:ghcr\.io/)?ai-dock/comfyui:[^\s\n\r"\'`\]]+', versions['images.comfyui']),
         (r'(?:docker\.io/)?ollama/ollama:[^\s\n\r"\'`\]]+', versions['images.ollama']),
-        (r'(?:ghcr\.io/)?berriai/litellm:[^\s\n\r"\'`\]]+', versions['images.litellm'])
+        (r'(?:ghcr\.io/)?berriai/litellm:[^\s\n\r"\'`\]]+', versions['images.litellm']),
+        (r'(?:ghcr\.io/)?go-authentik/server:[^\s\n\r"\'`\]]+', versions['images.authentik']),
+        (r'(?:docker\.io/)?bitnami/postgresql:[^\s\n\r"\'`\]]+', versions['images.postgres']),
+        (r'(?:docker\.io/)?bitnami/redis:[^\s\n\r"\'`\]]+', versions['images.redis'])
     ]
     for pattern, replacement in replacements:
         content = re.sub(pattern, replacement, content)
@@ -66,6 +69,7 @@ def sync_zarf_yaml(file_path, versions):
     content = update_chart_version(content, 'openbao', versions['charts.openbao'])
     content = update_chart_version(content, 'dcgm-exporter', versions['charts.dcgm_exporter'])
     content = update_chart_version(content, 'kube-prometheus-stack', versions['charts.kube_prometheus_stack'])
+    content = update_chart_version(content, 'authentik', versions['charts.authentik'])
     
     if content != original:
         with open(file_path, 'w', encoding='utf-8', newline='\n') as f:

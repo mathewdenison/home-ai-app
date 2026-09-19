@@ -1,21 +1,10 @@
 # gcert.ps1 - Windows Native Token Hydration Developer Utility
-# Replicates the SPA perimeter knock and Google OAuth 2.0 Device Code Flow natively in PowerShell.
+# Replicates the Google OAuth 2.0 Device Code Flow natively in PowerShell.
 
-$VPS_PERIMETER = "vpn.yourdomain.com"
 $AUTHENTIK_BASE = "https://auth.yourdomain.com"
 $CLIENT_ID = "YOUR_AUTHENTIK_CLIENT_ID_HERE"
 
-Write-Host "🚨 [1/4] Triggering Cryptographic SPA Perimeter Knock..." -ForegroundColor Yellow
-if (Get-Command fwknop -ErrorAction SilentlyContinue) {
-    fwknop -n "$VPS_PERIMETER"
-} elseif (Get-Command fwknop.exe -ErrorAction SilentlyContinue) {
-    fwknop.exe -n "$VPS_PERIMETER"
-} else {
-    Write-Host "⚠️ fwknop CLI not found in PATH. Skipping SPA knock. Please ensure fwknop is installed." -ForegroundColor DarkYellow
-}
-Start-Sleep -Seconds 1
-
-Write-Host "🌐 [2/4] Initializing OAuth Device Code Handshake with Authentik..." -ForegroundColor Yellow
+Write-Host "🌐 [1/3] Initializing OAuth Device Code Handshake with Authentik..." -ForegroundColor Yellow
 $Body = @{
     client_id = $CLIENT_ID
     scope     = "openid email profile"
@@ -44,7 +33,7 @@ Write-Host "--------------------------------------------------------" -Foregroun
 # Open default system web browser
 Start-Process $VerifyUrl
 
-Write-Host "⏳ [3/4] Awaiting browser-based Google OAuth validation confirmation..." -ForegroundColor Yellow
+Write-Host "⏳ [2/3] Awaiting browser-based Google OAuth validation confirmation..." -ForegroundColor Yellow
 $TokenBody = @{
     grant_type  = "urn:ietf:params:oauth:grant-type:device_code"
     device_code = $DeviceCode
@@ -78,7 +67,7 @@ while ($true) {
     }
 }
 
-Write-Host "✅ [4/4] Google Authentication Validated. Token acquired." -ForegroundColor Green
+Write-Host "✅ [3/3] Google Authentication Validated. Token acquired." -ForegroundColor Green
 
 $ConfigDir = Join-Path $HOME ".config\enclave"
 if (-not (Test-Path $ConfigDir)) {

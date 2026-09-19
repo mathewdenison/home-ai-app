@@ -26,6 +26,10 @@ components:
         namespace: ai-enclave
         valuesFiles:
           - openbao-values.yaml
+    actions:
+      onDeploy:
+        after:
+          - cmd: "kubectl wait --namespace ai-enclave --for=jsonpath='{.status.phase}'=Running pod/openbao-0 --timeout=120s"
     images:
       - docker.io/hashicorp/vault-k8s:1.7.2
       - quay.io/openbao/openbao:2.5.5
@@ -42,15 +46,31 @@ components:
         files:
           - ../gitops/base/openbao-init.yaml
 
+  - name: authentik-identity-stack
+    required: true
+    description: "Packaged Authentik SSO Identity Provider for cluster-wide OIDC"
+    charts:
+      - name: authentik
+        url: https://charts.goauthentik.io
+        version: "2024.4.2"
+        namespace: ai-enclave
+        valuesFiles:
+          - authentik-values.yaml
+    images:
+      - ghcr.io/goauthentik/server:2024.4.2
+      - docker.io/bitnamilegacy/postgresql:16.3.0-debian-12-r23
+      - docker.io/bitnamilegacy/redis:7.2.5-debian-12-r4
+
   - name: monitoring-infrastructure-charts
     required: true
-    noWait: true
     description: "Packaged cluster monitoring aggregation charts (Prometheus/Grafana)"
     charts:
       - name: kube-prometheus-stack
         url: https://prometheus-community.github.io/helm-charts
         version: "61.0.0"
         namespace: ai-enclave
+        valuesFiles:
+          - prometheus-values.yaml
     images:
       - quay.io/prometheus-operator/prometheus-operator:v0.75.0
       - quay.io/prometheus-operator/prometheus-config-reloader:v0.75.0

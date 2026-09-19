@@ -11,11 +11,15 @@ images:
   comfyui: "ghcr.io/ai-dock/comfyui:latest-cuda"
   ollama: "docker.io/ollama/ollama:latest"
   litellm: "ghcr.io/berriai/litellm:latest"
+  authentik: "ghcr.io/goauthentik/server:2024.4.2"
+  postgres: "docker.io/bitnamilegacy/postgresql:16.3.0-debian-12-r23"
+  redis: "docker.io/bitnamilegacy/redis:7.2.5-debian-12-r4"
 
 charts:
   openbao: "0.28.4"
   dcgm_exporter: "3.4.0"
   kube_prometheus_stack: "61.0.0"
+  authentik: "2024.4.2"
 
 models:
   vllm_default: "neuralmagic/DeepSeek-R1-Distill-Qwen-14B-AWQ"

@@ -65,19 +65,13 @@ spec:
                 ROOT_TOKEN=$(echo "$INIT_PAYLOAD" | grep -o '"root_token":"[^"]*' | grep -o '[^"]*$')
                 UNSEAL_KEY=$(echo "$INIT_PAYLOAD" | grep -o '"unseal_keys_b64":\["[^"]*"' | grep -o '[^"]*"' | tail -n 1 | tr -d '"')
                 
-                echo "💾 [4/5] Writing master keys to USB and cluster secrets..."
-                
-                # Save to USB
-                if [ -d "/mnt/usb" ]; then
-                  echo "$INIT_PAYLOAD" > /mnt/usb/openbao-master-keys.json
-                  chmod 600 /mnt/usb/openbao-master-keys.json
-                  echo "✅ Keys backed up to physical USB media (D:)."
-                fi
+                echo "💾 [4/5] Writing master keys to cluster secrets..."
 
-                # Create/Update Cluster Secret
+                # Create/Update Cluster Secret with both root token and unseal key
                 kubectl create secret generic openbao-root-token \
                   --namespace ai-enclave \
                   --from-literal=token="$ROOT_TOKEN" \
+                  --from-literal=unseal-key="$UNSEAL_KEY" \
                   --dry-run=client -o yaml | kubectl apply -f -
 
                 echo "🔓 [5/5] Performing initial unseal..."
@@ -87,22 +81,59 @@ spec:
               else
                 echo "ℹ️ OpenBao is already initialized. Checking seal status..."
                 if kubectl exec openbao-0 -n ai-enclave -- bao status 2>&1 | grep -q "Sealed.*true"; then
-                  echo "🔓 Detected sealed vault. Attempting auto-unseal from USB keys..."
-                  if [ -f "/mnt/usb/openbao-master-keys.json" ]; then
-                    UNSEAL_KEY=$(grep -o '"unseal_keys_b64":\["[^"]*"' /mnt/usb/openbao-master-keys.json | grep -o '[^"]*"' | tail -n 1 | tr -d '"')
+                  echo "🔓 Detected sealed vault. Attempting auto-unseal from cluster secrets..."
+                  UNSEAL_KEY_B64=$(kubectl get secret openbao-root-token -n ai-enclave -o jsonpath='{.data.unseal-key}' 2>/dev/null)
+                  if [ -n "$UNSEAL_KEY_B64" ]; then
+                    UNSEAL_KEY=$(echo "$UNSEAL_KEY_B64" | base64 -d 2>/dev/null || echo "$UNSEAL_KEY_B64" | base64 --decode)
                     kubectl exec openbao-0 -n ai-enclave -- bao operator unseal "$UNSEAL_KEY"
                     echo "✅ Re-unsealed successfully."
                   else
-                    echo "⚠️ No keys found on USB. Manual unseal required."
+                    echo "⚠️ No unseal key found in cluster secret. Manual unseal required."
                   fi
                 else
                   echo "✅ OpenBao is already unsealed and ready."
                 fi
               fi
-          volumeMounts:
-            - name: usb-mount
-              mountPath: /mnt/usb
-      volumes:
-        - name: usb-mount
-          hostPath:
-            path: /mnt/usb # Points to your physical media on the host OS
+
+              echo "🛡️ [6/5] Configuring OpenBao Access Control Policies..."
+              # Fetch Root Token if not already in memory
+              if [ -z "$ROOT_TOKEN" ]; then
+                ROOT_TOKEN_B64=$(kubectl get secret openbao-root-token -n ai-enclave -o jsonpath='{.data.token}' 2>/dev/null)
+                ROOT_TOKEN=$(echo "$ROOT_TOKEN_B64" | base64 -d 2>/dev/null || echo "$ROOT_TOKEN_B64" | base64 --decode)
+              fi
+
+              # Helper function for bao commands
+              bao_cmd() {
+                kubectl exec openbao-0 -n ai-enclave -- env BAO_TOKEN="$ROOT_TOKEN" bao "$@"
+              }
+
+              # 1. Enable Kubernetes Auth Method
+              if ! bao_cmd auth list | grep -q "kubernetes/"; then
+                bao_cmd auth enable kubernetes
+              fi
+
+              # 2. Configure Kubernetes Auth to talk to local API
+              bao_cmd write auth/kubernetes/config \
+                kubernetes_host="https://kubernetes.default.svc" \
+                disable_iss_validation=true
+
+              # 3. Create a policy for the Enclave application pods
+              # Grants read access to the 'enclave' secret path
+              echo 'path "secret/data/enclave/*" { capabilities = ["read"] }' | kubectl exec -i openbao-0 -n ai-enclave -- env BAO_TOKEN="$ROOT_TOKEN" bao policy write enclave-policy -
+
+              # 4. Create a role that binds the ServiceAccount to the policy
+              bao_cmd write auth/kubernetes/role/enclave-role \
+                bound_service_account_names="*" \
+                bound_service_account_namespaces="ai-enclave" \
+                policies="enclave-policy" \
+                ttl="24h"
+
+              # 5. Seed initial placeholder secrets if they don't exist
+              if ! bao_cmd kv get secret/enclave/runtime >/dev/null 2>&1; then
+                bao_cmd kv put secret/enclave/runtime \
+                  OPENID_PROVIDER_SECRET="placeholder-oidc-secret" \
+                  SEARXNG_SECRET_KEY="placeholder-searxng-key" \
+                  LITELLM_MASTER_KEY="local-enclave-key"
+              fi
+
+              echo "✨ OpenBao security policies and auth methods fully provisioned."

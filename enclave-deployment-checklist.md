@@ -1,6 +1,6 @@
 # Sovereign Enclave: Day-One Runbook & Configuration Checklist
 
-This manual lists every single placeholder, configuration toggle, URL domain, and secret that must be updated/swapped out once your physical hardware (the Beelink Gateway and the local 4090 Workstation) is booted and active.
+This manual lists every single placeholder, configuration toggle, local DNS domain, and secret that must be updated/swapped out once your Fedora 44 Workstation servers (the Beelink Gateway and the local 4090 Workstation) are active.
 
 ---
 
@@ -8,44 +8,18 @@ This manual lists every single placeholder, configuration toggle, URL domain, an
 
 | Scope / File | Placeholder Variable | Production Value | Impact / Purpose |
 | :--- | :--- | :--- | :--- |
-| **Network & Mesh** | `vpn.yourdomain.com` | Your public VPS domain/IP | Directs SPA knocks and Headscale mesh traffic |
-| **Authentication** | `https://auth.yourdomain.com` | Your Authentik URL | Ingress gate for user verification |
+| **Authentication** | `https://auth.yourdomain.com` | Your local Authentik URL | Ingress gate for user verification |
 | **Authentication** | `YOUR_AUTHENTIK_CLIENT_ID_HERE` | Authentik OIDC Client ID | Registers the CLI (`gcert`) in Authentik |
 | **Authentication** | `open-webui-client-id-placeholder` | Authentik App Client ID | Connects the Web UI container to OIDC |
-| **OS Partitioning** | `nvme0n1` & `nvme0n2` | Active drive identifiers | Disk targets for automatic Btrfs RAID 1 pool |
-| **OS Networking** | `enp2s0` | Active network interface name | Binds the direct Cat6 physical pipeline |
 | **Cluster Topology** | `desktop-4090` | Actual host name | Binds heavy GPU tasks to the 4090 Node |
 | **Host Directory Paths**| `/home/admin/ai-hub/workspace` | Actual admin path | Maps host sandboxes to cluster volumes |
-| **Credentials Baseline**| `temporary_bootstrap_pass` | Cryptographic SHA512 hash | Blocks unauthenticated physical console logins |
 
 ---
 
 ## 🛠️ Step-by-Step Resolution Procedures
 
-### 1. Hardened Kickstart Adjustments (`bootstrap/enclave-kickstart.cfg`)
-*   **Target Drives**: Verify drive IDs using `lsblk` on your Beelink and 4090 machine. If they use SATA SSDs instead of NVMe, replace `nvme0n1` and `nvme0n2` with `sda` and `sdb`.
-*   **Physical Network Interface**: Find the Cat6 card interface name with `ip link`. Swap `enp2s0` with your card name (e.g., `eth0` or `enp3s0`).
-*   **Secure Root/Admin Passwords**:
-    Never use raw text passwords in Kickstart configurations. Generate a cryptographically hashed string (SHA-512) for your `admin` user password:
-    ```bash
-    python3 -c 'import crypt; print(crypt.crypt("your_super_secure_pass", crypt.mksalt(crypt.METHOD_SHA512)))'
-    ```
-    Replace `temporary_bootstrap_pass` in `enclave-kickstart.cfg` with your generated `$6$...` hash and change `--plaintext` to `--iscrypted`.
-
-### 2. Mesh Gateway Verification (`scripts/gcert` & `scripts/gcert.ps1`)
-Once your public VPS gateway is configured and the Authentik portal is up:
-*   Swap `vpn.yourdomain.com` with the public DNS name or IPv4 address of your VPS.
-*   Swap `https://auth.yourdomain.com` with the public Authentik domain.
-*   Once you register a **Device Code Authorization flow** client in the Authentik Admin Portal, extract the Client ID and paste it over `YOUR_AUTHENTIK_CLIENT_ID_HERE`.
-
-### 3. GitOps Core Identity Setup (`gitops/config/auth-settings.yaml`)
-In your Authentik Admin Console:
-1. Create a new OIDC Provider for Open WebUI.
-2. In `gitops/config/auth-settings.yaml`, update `authentik_client_id_placeholder` with the newly generated WebUI client ID.
-3. If your internal mesh uses a different domain than `internal-mesh.local`, adjust `authentik_base_url` accordingly.
-
-### 4. GPU Worker Binding (`gitops/base/enclave-apps.yaml`)
-Tomorrow, after joining your 4090 workstation to the K3s cluster:
+### 1. GPU Worker Binding (`gitops/base/enclave-apps.yaml`)
+After joining your 4090 workstation to the K3s cluster:
 1. Run `kubectl get nodes` to find the exact name registered for your 4090 machine.
 2. Under the `vllm-inference-engine` deployment in `enclave-apps.yaml`, ensure the `nodeSelector` matches that exact hostname:
    ```yaml
@@ -53,72 +27,45 @@ Tomorrow, after joining your 4090 workstation to the K3s cluster:
      kubernetes.io/hostname: [EXACT_4090_NODE_NAME]
    ```
 
-### 4b. Cryptographic Mesh Node Signing (`tailscale lock`)
-Because Tailnet Locking is active, your newly bootstrapped Beelink and 4090 nodes will be locked out of communicating until signed:
-1. Run `tailscale status` on your new nodes to fetch their respective **Node Keys**.
-2. From your primary signed administrative machine, authorize each node:
-   ```bash
-   tailscale lock sign nodekey:abcdef123456...
-   ```
+### 2. Token Hydration & SSO (`scripts/gcert.ps1` & `gitops/config/auth-settings.yaml`)
+Once your local Authentik portal is up:
+*   Swap `https://auth.yourdomain.com` with your local Authentik domain (e.g. `https://auth.internal-mesh.local` or standard LAN domain).
+*   Once you register a **Device Code Authorization flow** client in the Authentik Admin Portal, extract the Client ID and paste it over `YOUR_AUTHENTIK_CLIENT_ID_HERE` in `scripts/gcert.ps1`.
+*   In `gitops/config/auth-settings.yaml`, update `authentik_client_id_placeholder` with the newly generated WebUI client ID.
 
 ---
 
-## 🔒 5. Hydrating Secrets via OpenBao (Dynamic Ingress)
+## 🔒 3. Hydrating Secrets via OpenBao (Dynamic Injection)
 
-The `enclave-apps.yaml` workload retrieves its secrets dynamically using Kubernetes secret injection. You must manually hydrate the `runtime-injected-secrets` secret inside the `ai-enclave` namespace.
+The `enclave-apps.yaml` workload retrieves its secrets dynamically using **OpenBao Sidecar Injection**. You must manually seed the master secrets into the vault's KV store.
 
 ### The Required Secret Payload Scheme
-Create a local staging file `secrets-payload.yaml` (ensure this is **never** committed to Git!):
+Execute these commands from a machine with `kubectl` access to your cluster (e.g. your Beelink terminal or your workstation over the local network):
 
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: runtime-injected-secrets
-  namespace: ai-enclave
-type: Opaque
-stringData:
-  # Open WebUI OIDC Integration Secret
-  OPENID_PROVIDER_SECRET: "your_authentik_webui_client_secret"
-  
-  # Web Search API / SearXNG Encryption Keys
-  SEARXNG_SECRET_KEY: "your_randomly_generated_hex_key"
-  
-  # AI Model API Keys (If integrating outbound models alongside local vLLM)
-  OPENAI_API_KEY: "your_fallback_api_key_or_empty_string"
-  
-  # HuggingFace Hub Token (For vLLM to download gated models, e.g. Llama 3)
-  HF_TOKEN: "your_huggingface_write_token"
-```
-
-Apply this secure envelope to your cluster:
 ```bash
-kubectl apply -f secrets-payload.yaml
-rm secrets-payload.yaml # Securely destroy the local copy instantly
+# 1. Fetch the OpenBao Root Token (stored during auto-init)
+ROOT_TOKEN=$(kubectl get secret openbao-root-token -n ai-enclave -o jsonpath='{.data.token}' | base64 -d)
+
+# 2. Inject your production secrets into the vault
+# Replace placeholders with your actual production values!
+kubectl exec -it openbao-0 -n ai-enclave -- env BAO_TOKEN="$ROOT_TOKEN" bao kv put secret/enclave/runtime \
+  OPENID_PROVIDER_SECRET="your_authentik_webui_client_secret" \
+  SEARXNG_SECRET_KEY="your_randomly_generated_hex_key" \
+  LITELLM_MASTER_KEY="your_super_secure_api_master_key" \
+  HF_TOKEN="your_huggingface_write_token"
+
+# 3. (Optional) Verify the secrets are correctly stored
+kubectl exec -it openbao-0 -n ai-enclave -- env BAO_TOKEN="$ROOT_TOKEN" bao kv get secret/enclave/runtime
 ```
+
+*Note: Once written to OpenBao, your application pods will automatically pick up these changes upon their next restart.*
 
 ---
 
-## 🛡️ 5b. Confirming Host-Level Privacy VPN (Mullvad) Status
-Before spinning up your cluster applications, verify that your host operating system is routing all external traffic (including Tailscale mesh connections to your VPS) through your commercial privacy VPN:
-
-1.  On your Beelink Gateway terminal, run:
-    ```bash
-    mullvad status
-    ```
-    Ensure it prints: `Connected to [Location]` and lock-down mode is `on`.
-2.  Test the IP leak protection to confirm your residential IP is hidden:
-    ```bash
-    curl https://am.i.mullvad.net/connected
-    ```
-3.  Check active connection interface endpoints on your Tailscale VPS admin interface. The client IP registered for your Beelink server **must match your Mullvad VPN exit node's public IP address**, not your home IP.
-
----
-
-## 🏃‍♂️ 6. Making day-one scripts executable (Post-Partitioning)
-Once the files are pulled down onto your active Linux nodes (e.g. Beelink Gateway or WSL/Ubuntu), make sure you elevate execution permissions. Run this in your workspace directory:
+## 🏃‍♂️ 4. Making day-one scripts executable
+Once the files are pulled down onto your active Linux nodes (e.g. Beelink Gateway or WSL/Workstation), elevate execution permissions. Run this in your workspace directory:
 ```bash
-chmod +x scripts/bake-usb.sh scripts/setup-enclave.sh scripts/gcert
+chmod +x scripts/setup-enclave.sh
 ```
 On Windows, PowerShell scripts may require adjusting the local execution policy to run `gcert.ps1` natively:
 ```powershell
@@ -128,7 +75,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 ---
 
-## 🔄 7. Managing Single-Source-Of-Truth Upgrades
+## 🔄 5. Managing Single-Source-Of-Truth Upgrades
 
 All container image versions, Helm chart releases, and default AI models are cataloged centrally in `versions.yaml`. To change a version (e.g., upgrading Open WebUI or pinning a specific vLLM build):
 
@@ -151,7 +98,7 @@ All container image versions, Helm chart releases, and default AI models are cat
 
 ---
 
-## 🎨 8. Advanced Open WebUI Integrations (Images, Voice & Conduit App)
+## 🎨 6. Advanced Open WebUI Integrations (Images, Voice & Conduit App)
 
 We have pre-configured Open WebUI in `enclave-apps.yaml` to enable high-fidelity image generation, real-time speech-to-text (STT), text-to-speech (TTS), and streaming WebSockets.
 
@@ -172,7 +119,7 @@ We have pre-configured Open WebUI in `enclave-apps.yaml` to enable high-fidelity
 ### C. WebSockets & Mobile Conduit App Compatibility
 The **Conduit** mobile app requires WebSocket connections (`ws://` / `wss://`) to stream tokens and orchestrate real-time socket events natively.
 *   **Websockets Configuration**: Open WebUI is a FastAPI app running on Uvicorn, which has WebSocket support **turned on and active by default** on port `8080`.
-*   **Reverse Proxy Requirement (IMPORTANT)**: If you access your Web UI through a custom domain/ingress (like Caddy, NGINX Ingress, or Authentik Gateway), you **must** configure your reverse proxy to forward WebSocket upgrade headers.
+*   **Reverse Proxy Requirement**: If you access your Web UI through a custom domain/ingress (like Caddy, NGINX Ingress, or Authentik Gateway), you **must** configure your reverse proxy to forward WebSocket upgrade headers.
     *   **Caddy Configuration (Example)**: Caddy supports WebSockets natively out of the box with zero extra config!
     *   **Nginx Configuration (Example)**: If using Nginx, ensure these lines are active inside your gateway `location /` reverse-proxy blocks:
         ```nginx
@@ -191,12 +138,12 @@ We have bypassed client-side scripting and **natively integrated the intelligent
 *   **Agnostic Client Benefits**: Because this lives on your cluster-internal gateway:
     1.  **Open WebUI**: Simply select the default **`sovereign-enclave-model`** dropdown. Routing happens seamlessly under the hood.
     2.  **Mobile Conduit App**: Point Conduit to your server. It will stream completions from `sovereign-enclave-model` utilizing dynamic routing.
-    3.  **Local CLIs, API calls, and IDEs (Cursor/Cline)**: Point your dev tools to `http://lite-llm-service.ai-enclave.svc.cluster.local:8000/v1` targeting model `sovereign-enclave-model`. Your automated agent scripts and code assistants will automatically receive fast 4090 GPU acceleration for small edits, and transparently scale up to the Beelink 70B for heavy code-refactoring pipelines!
-*   **Automatic 4090 Failover**: If your 4090 node is powered down or booted in Windows, LiteLLM's internal failover handler intercepts the timeout within 2.0 seconds and automatically shifts *all* traffic to the Beelink 70B CPU engine. Conversations never fail!
+    3.  **Local CLIs, API calls, and IDEs (Cursor/Cline)**: Point your dev tools to `http://lite-llm-service.ai-enclave.svc.cluster.local:8000/v1` targeting model `sovereign-enclave-model`. Your assistants will automatically receive fast 4090 GPU acceleration for small edits, and transparently scale up to the Beelink 70B for heavy reasoning pipelines!
+*   **Automatic 4090 Failover**: If your 4090 node is powered down, LiteLLM's internal failover handler intercepts the timeout within 2.0 seconds and automatically shifts *all* traffic to the Beelink 70B CPU engine. Conversations never fail!
 
 ---
 
-## 📊 9. Accessing and Configuring Grafana Observability Dashboards
+## 📊 7. Accessing and Configuring Grafana Observability Dashboards
 
 Your cluster automatically captures comprehensive host-level, GPU-level, and container-level metrics across both physical servers simultaneously.
 
@@ -206,12 +153,12 @@ Your cluster automatically captures comprehensive host-level, GPU-level, and con
 *   **Aggregator & Visualizer**: Prometheus collects these metrics, and **Grafana** (deployed via `kube-prometheus-stack` on your Beelink) serves as the visualization interface.
 
 ### B. Accessing your Grafana Dashboard
-By default, Grafana runs inside your monitoring/Kubernetes systems. You can access it securely from your phone or developer machine over your Tailscale tunnel:
+By default, Grafana runs inside your monitoring systems. You can access it securely from your workstation:
 1.  Port-forward the Grafana service locally to access its interface:
     ```bash
     kubectl port-forward svc/kube-prometheus-stack-grafana -n ai-enclave 3000:80
     ```
-2.  Open your browser and navigate to **`http://localhost:3000`** (or access it over your custom mesh DNS ingress mapping, e.g. `http://grafana.internal-mesh.local`).
+2.  Open your browser and navigate to **`http://localhost:3000`** (or access it over your custom mesh DNS ingress mapping, e.g. `http://dashboards.internal-mesh.local`).
 3.  Log in using your default credentials (standard is username: `admin` and password: `prom-operator` or dynamically configured via OpenBao!).
 
 ### C. Unified Custom Dashboard (Auto-Discovery Active!)

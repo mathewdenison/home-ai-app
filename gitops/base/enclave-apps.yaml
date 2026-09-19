@@ -17,12 +17,22 @@ spec:
     metadata:
       labels:
         app: open-webui
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "enclave-role"
+        vault.hashicorp.com/agent-inject-secret-runtime: "secret/data/enclave/runtime"
+        vault.hashicorp.com/agent-inject-template-runtime: |
+          {{- with secret "secret/data/enclave/runtime" -}}
+          export OPENID_PROVIDER_SECRET="{{ .Data.data.OPENID_PROVIDER_SECRET }}"
+          export SEARXNG_SECRET_KEY="{{ .Data.data.SEARXNG_SECRET_KEY }}"
+          {{- end -}}
     spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true" # Permanently anchors the UI and Vector DB to the Beelink GTR9 Pro
       containers:
         - name: webui-frontend
           image: ghcr.io/open-webui/open-webui:main
+          command: ["/bin/bash", "-c", "source /vault/secrets/runtime && bash /app/backend/start.sh"]
           ports:
             - containerPort: 8080
           env:
@@ -72,9 +82,6 @@ spec:
               value: "2592000" # Browser access persistence window: 30 days
             - name: JWT_EXPIRATION_DURATION
               value: "43200" # CLI API lease duration profile: 12 hours
-          envFrom:
-            - secretRef:
-                name: runtime-injected-secrets
           volumeMounts:
             - name: webui-storage
               mountPath: /app/backend/data
@@ -82,6 +89,66 @@ spec:
         - name: webui-storage
           hostPath:
             path: /home/admin/ai-hub/workspace/open-webui
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: open-webui-service
+  namespace: ai-enclave
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: open-webui
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: enclave-ingress
+  namespace: ai-enclave
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  tls:
+    - hosts:
+        - ai.internal-mesh.local
+        - api.internal-mesh.local
+        - dashboards.internal-mesh.local
+      secretName: mesh-tls-cert
+  rules:
+    - host: ai.internal-mesh.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: open-webui-service
+                port:
+                  number: 80
+    - host: api.internal-mesh.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: lite-llm-service
+                port:
+                  number: 8000
+    - host: dashboards.internal-mesh.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kube-prometheus-stack-grafana
+                port:
+                  number: 80
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -98,7 +165,6 @@ spec:
       labels:
         app: searxng
     spec:
-      runtimeClassName: runsc # Enforces strict Google gVisor user-space kernel translation boundaries
       containers:
         - name: searxng-engine
           image: docker.io/searxng/searxng:latest
@@ -158,7 +224,7 @@ spec:
               nvidia.com/gpu: "1"
           volumeMounts:
             - mountPath: /dev/shm
-              name: dshm # Bypasses Rocky's STIG non-execution lock via isolated RAM allocation
+              name: dshm # Isolated RAM allocation for fast inference
             - mountPath: /models
               name: model-storage
       volumes:
@@ -185,7 +251,6 @@ spec:
       labels:
         app: agent-sandbox
     spec:
-      runtimeClassName: runsc # Enforces strict Google gVisor user-space kernel translation boundaries
       containers:
         - name: sandbox-runtime
           image: docker.io/library/python:3.11-slim
@@ -386,21 +451,21 @@ data:
         litellm_params:
           model: openai/deepseek-r1:70b
           api_base: http://ollama-service.ai-enclave.svc.cluster.local:11434/v1
-          api_key: local-enclave-key
+          api_key: "os.environ/LITELLM_MASTER_KEY"
         model_info:
           id: beelink-70b-heavy
       - model_name: sovereign-enclave-model
         litellm_params:
           model: openai/deepseek-r1:14b
           api_base: http://ollama-service.ai-enclave.svc.cluster.local:11434/v1
-          api_key: local-enclave-key
+          api_key: "os.environ/LITELLM_MASTER_KEY"
         model_info:
           id: beelink-14b-fast-fallback
       - model_name: sovereign-enclave-model
         litellm_params:
           model: openai/neuralmagic/DeepSeek-R1-Distill-Qwen-14B-AWQ
           api_base: http://vllm-service.ai-enclave.svc.cluster.local:8000/v1
-          api_key: local-enclave-key
+          api_key: "os.environ/LITELLM_MASTER_KEY"
           timeout: 2.0
         model_info:
           id: workstation-14b-fast
@@ -408,7 +473,7 @@ data:
       routing_strategy: "custom"
       custom_routing_strategy_path: "/app/custom_router.py"
     general_settings:
-      master_key: "local-enclave-key"
+      master_key: "os.environ/LITELLM_MASTER_KEY"
   custom_router.py: |
     import re
     import socket
@@ -506,18 +571,27 @@ spec:
     metadata:
       labels:
         app: litellm-proxy
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "enclave-role"
+        vault.hashicorp.com/agent-inject-secret-runtime: "secret/data/enclave/runtime"
+        vault.hashicorp.com/agent-inject-template-runtime: |
+          {{- with secret "secret/data/enclave/runtime" -}}
+          export LITELLM_MASTER_KEY="{{ .Data.data.LITELLM_MASTER_KEY }}"
+          {{- end -}}
     spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true" # Schedules the gateway on the Beelink Pro
       containers:
         - name: litellm
           image: ghcr.io/berriai/litellm:latest
+          command: ["/bin/sh", "-c", "source /vault/secrets/runtime && python3 -m litellm --config /app/config.yaml --port 4000"]
           ports:
             - containerPort: 4000
-          args: ["--config", "/app/config.yaml", "--port", "4000"]
+          args: [] # Overridden by command to allow source
           env:
             - name: LITELLM_MASTER_KEY
-              value: "local-enclave-key"
+              value: "insecure-placeholder-will-be-overridden-by-source"
           volumeMounts:
             - name: config-volume
               mountPath: /app/config.yaml

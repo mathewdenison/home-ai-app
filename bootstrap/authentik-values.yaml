@@ -1,0 +1,35 @@
+authentik:
+  secret_key: "insecure-bootstrap-key-replace-me" # Should be rotated post-deployment
+  postgresql:
+    enabled: true
+    image:
+      repository: docker.io/bitnamilegacy/postgresql
+      tag: 16.3.0-debian-12-r23
+  redis:
+    enabled: true
+    image:
+      repository: docker.io/bitnamilegacy/redis
+      tag: 7.2.5-debian-12-r4
+  server:
+    image:
+      repository: ghcr.io/goauthentik/server
+      tag: 2024.4.2
+  worker:
+    image:
+      repository: ghcr.io/goauthentik/server
+      tag: 2024.4.2
+
+# Custom Sovereign Enclave Settings
+server:
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+      traefik.ingress.kubernetes.io/router.tls: "true"
+    hosts:
+      - auth.internal-mesh.local
+    tls:
+      - hosts:
+          - auth.internal-mesh.local
+        secretName: mesh-tls-cert
