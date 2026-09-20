@@ -132,17 +132,46 @@ else
     chcon -R -t container_var_lib_t /opt/k3s-data 2>/dev/null || true
 fi
 
-# Intelligently find local network IP
-LOCAL_IP=""
+# Intelligently find local network IP and support multiple interfaces (e.g. direct link + switch)
+VALID_IPS=()
 for ip_entry in $(ip -o -4 addr show | awk '{print $4}' | cut -d/ -f1); do
     if [ "$ip_entry" != "127.0.0.1" ] && [[ "$ip_entry" != 172.17.* ]] && [[ "$ip_entry" != 10.42.* ]]; then
         if [[ "$ip_entry" =~ ^10\. ]] || [[ "$ip_entry" =~ ^192\.168\. ]] || [[ "$ip_entry" =~ ^172\. ]]; then
-            LOCAL_IP="$ip_entry"
-            break
+            VALID_IPS+=("$ip_entry")
         fi
-        if [ -z "$LOCAL_IP" ]; then LOCAL_IP="$ip_entry"; fi
     fi
 done
+
+LOCAL_IP=""
+EXTERNAL_IP=""
+
+if [ ${#VALID_IPS[@]} -gt 1 ]; then
+    echo "🌐 Multiple network interfaces / IP addresses detected:"
+    for i in "${!VALID_IPS[@]}"; do
+        echo "  $((i + 1)): ${VALID_IPS[i]}"
+    done
+    echo ""
+    read -p "Select the IP address to be used for INTERNAL cluster communication (Direct Link) [1-${#VALID_IPS[@]}, Default: 1]: " IP_SELECTION
+    if [ -z "$IP_SELECTION" ]; then
+        LOCAL_IP="${VALID_IPS[0]}"
+    elif [[ "$IP_SELECTION" =~ ^[0-9]+$ ]] && [ "$IP_SELECTION" -le "${#VALID_IPS[@]}" ]; then
+        LOCAL_IP="${VALID_IPS[$((IP_SELECTION - 1))]}"
+    else
+        echo "⚠️ Invalid selection. Defaulting to ${VALID_IPS[0]}"
+        LOCAL_IP="${VALID_IPS[0]}"
+    fi
+
+    # Identify the external IP (for user ingress and TLS certificate SANs)
+    for ip in "${VALID_IPS[@]}"; do
+        if [ "$ip" != "$LOCAL_IP" ]; then
+            EXTERNAL_IP="$ip"
+            break
+        fi
+    done
+else
+    LOCAL_IP="${VALID_IPS[0]}"
+fi
+
 LOCAL_IP=$(echo "$LOCAL_IP" | tr -d '[:space:]')
 
 # AIRGAPPED ROUTING COMPLIANCE
@@ -174,6 +203,18 @@ flannel-backend: vxlan
 EOF
 if [ -n "$LOCAL_IP" ] && [[ "$LOCAL_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "node-ip: \"$LOCAL_IP\"" >> /etc/rancher/k3s/config.yaml
+fi
+
+# Add TLS Subject Alternative Names (SANs) for secure client connection from the switch interface
+if [ "$NODE_CHOICE" = "1" ]; then
+    echo "tls-san:" >> /etc/rancher/k3s/config.yaml
+    echo "  - \"home.internal-mesh.local\"" >> /etc/rancher/k3s/config.yaml
+    echo "  - \"ai.internal-mesh.local\"" >> /etc/rancher/k3s/config.yaml
+    echo "  - \"api.internal-mesh.local\"" >> /etc/rancher/k3s/config.yaml
+    echo "  - \"dashboards.internal-mesh.local\"" >> /etc/rancher/k3s/config.yaml
+    if [ -n "$EXTERNAL_IP" ]; then
+        echo "  - \"$EXTERNAL_IP\"" >> /etc/rancher/k3s/config.yaml
+    fi
 fi
 
 # Helper function to find a package by pattern
