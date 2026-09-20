@@ -114,11 +114,22 @@ metadata:
 spec:
   tls:
     - hosts:
+        - home.internal-mesh.local
         - ai.internal-mesh.local
         - api.internal-mesh.local
         - dashboards.internal-mesh.local
       secretName: mesh-tls-cert
   rules:
+    - host: home.internal-mesh.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: enclave-portal-service
+                port:
+                  number: 80
     - host: ai.internal-mesh.local
       http:
         paths:
@@ -616,3 +627,38 @@ spec:
     - protocol: TCP
       port: 8000
       targetPort: 4000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: enclave-portal
+  namespace: ai-enclave
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: enclave-portal
+  template:
+    metadata:
+      labels:
+        app: enclave-portal
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true" # Runs on the Beelink
+      containers:
+        - name: portal-frontend
+          image: ghcr.io/enclave/portal:latest
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: enclave-portal-service
+  namespace: ai-enclave
+spec:
+  ports:
+    - port: 80
+      targetPort: 80
+  selector:
+    app: enclave-portal

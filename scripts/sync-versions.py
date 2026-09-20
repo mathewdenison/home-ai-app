@@ -41,9 +41,10 @@ def update_images(content, versions):
         (r'(?:ghcr\.io/)?ai-dock/comfyui:[^\s\n\r"\'`\]]+', versions['images.comfyui']),
         (r'(?:docker\.io/)?ollama/ollama:[^\s\n\r"\'`\]]+', versions['images.ollama']),
         (r'(?:ghcr\.io/)?berriai/litellm:[^\s\n\r"\'`\]]+', versions['images.litellm']),
-        (r'(?:ghcr\.io/)?go-authentik/server:[^\s\n\r"\'`\]]+', versions['images.authentik']),
-        (r'(?:docker\.io/)?bitnami/postgresql:[^\s\n\r"\'`\]]+', versions['images.postgres']),
-        (r'(?:docker\.io/)?bitnami/redis:[^\s\n\r"\'`\]]+', versions['images.redis'])
+        (r'(?:ghcr\.io/)?go-?authentik/server:[^\s\n\r"\'`\]]+', versions['images.authentik']),
+        (r'(?:docker\.io/)?bitnami(?:legacy)?/postgresql:[^\s\n\r"\'`\]]+', versions['images.postgres']),
+        (r'(?:docker\.io/)?bitnami(?:legacy)?/redis:[^\s\n\r"\'`\]]+', versions['images.redis']),
+        (r'(?:ghcr\.io/)?enclave/portal:[^\s\n\r"\'`\]]+', versions['images.enclave_portal'])
     ]
     for pattern, replacement in replacements:
         content = re.sub(pattern, replacement, content)

@@ -49,7 +49,7 @@ To access the enclave services under their proper local domain names (such as `a
 - **Option A (Router DNS / Pi-hole)**: Add local DNS records pointing `*.internal-mesh.local` (or each host individually) to the static IP address of your Beelink Gateway node on your primary LAN.
 - **Option B (Hosts File)**: For developer workloads on your admin machine, map the host entries directly:
   ```text
-  [BEELINK_STATIC_LAN_IP] ai.internal-mesh.local auth.internal-mesh.local dashboards.internal-mesh.local api.internal-mesh.local
+  [BEELINK_STATIC_LAN_IP] home.internal-mesh.local ai.internal-mesh.local auth.internal-mesh.local dashboards.internal-mesh.local api.internal-mesh.local
   ```
 
 ---

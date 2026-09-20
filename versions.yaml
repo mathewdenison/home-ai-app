@@ -14,6 +14,7 @@ images:
   authentik: "ghcr.io/goauthentik/server:2024.4.2"
   postgres: "docker.io/bitnamilegacy/postgresql:16.3.0-debian-12-r23"
   redis: "docker.io/bitnamilegacy/redis:7.2.5-debian-12-r4"
+  enclave_portal: "ghcr.io/enclave/portal:latest"
 
 charts:
   openbao: "0.28.4"

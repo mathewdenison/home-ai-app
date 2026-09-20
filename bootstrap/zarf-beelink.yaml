@@ -15,6 +15,7 @@ components:
       - ghcr.io/berriai/litellm:latest
       - docker.io/library/python:3.11-slim
       - docker.io/bitnami/kubectl:latest # Image for the managed OpenBao init job
+      - ghcr.io/enclave/portal:latest
 
   - name: openbao-security-chart
     required: true
